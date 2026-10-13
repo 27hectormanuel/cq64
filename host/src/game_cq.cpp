@@ -1,5 +1,10 @@
 // SPDX-License-Identifier: CC0-1.0
 // Costume Quest (com.doublefine.cq): SDL-based Double Fine engine in libCq.so.
+//
+// Built in two variants (CMake CQ_VARIANT): "optimized" adds controller support (gamepad.cpp),
+// patches to the data pack (datapatch.cpp) and debug hooks driven from adb; "original"
+// (CQ_ORIGINAL) only does what running the 32-bit game on a 64-bit-only phone requires, so it
+// plays exactly like the 32-bit APK.
 #include "datapatch.h"
 #include "devtools.h"
 #include "game.h"
@@ -38,17 +43,23 @@ void setup() {
         std::string apk = host::own_apk();
         if (!apk.empty()) paths::add_mapping(apk, data_zip);
         else LOGW("data zip present but own APK path not found");
-        datapatch::init(data_zip);
-    } else {
-        datapatch::init(host::own_apk());
     }
+#ifndef CQ_ORIGINAL
+    datapatch::init(access(data_zip.c_str(), R_OK) == 0 ? data_zip : host::own_apk());
+#endif
 }
 
+#ifdef CQ_ORIGINAL
+void after_load(Module *) {}
+#else
 void after_load(Module *main) { gamepad::install(main); }
+#endif
 
 void register_natives(JNIEnv *env) {
-    devtools::register_natives(env);
+    devtools::register_natives(env);  // no-op without the DevTools class (original variant)
+#ifndef CQ_ORIGINAL
     gamepad::register_natives(env);
+#endif
 }
 
 // Debug aids:
@@ -56,6 +67,9 @@ void register_natives(JNIEnv *env) {
 //   echo '1 150' | ... sh -c 'cat > files/pad'   presses virtual pad buttons (mask, ms) in turn
 //   ... sh -c 'echo 1 > files/padauto'   plays battle prompts with synthetic pad input (0: off);
 //                                        'echo 1 5 > ...' also makes every prompt BattlePrompt 5 (-1: off)
+#ifdef CQ_ORIGINAL
+void poll_debug() {}
+#else
 void poll_debug() {
     const std::string autof = files_dir() + "/padauto";
     if (FILE *f = fopen(autof.c_str(), "r")) {
@@ -88,6 +102,7 @@ void poll_debug() {
         unlink(console.c_str());
     }
 }
+#endif
 }  // namespace game
 
 constexpr const char *SDL = "org/libsdl/app/SDLActivity";

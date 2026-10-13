@@ -9,7 +9,7 @@
 ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 ANDROID_HOME=${ANDROID_HOME:-${ANDROID_SDK_ROOT:-$HOME/Android/Sdk}}
 
-newest() { ls -d "$1"/*/ 2>/dev/null | sort -V | tail -1 | sed 's:/$::'; }
+newest() { ls -d "$1"/*/ 2>/dev/null | sort -V | tail -1 | sed 's:/$::' || true; }
 
 NDK=${NDK:-$(newest "$ANDROID_HOME/ndk")}
 BUILD_TOOLS=${BUILD_TOOLS:-$(newest "$ANDROID_HOME/build-tools")}

@@ -67,16 +67,39 @@ scripts/fetch_deps.sh          # once: dynarmic, Boost headers, apktool (pinned,
 
 ### Costume Quest
 
+There are two variants to choose from:
+
+| Variant | What you get | Output |
+|---|---|---|
+| **original** | The game 1:1 as the 32-bit APK plays it: touch only, no developer menu, no data changes. Only what running it on a 64-bit-only phone needs is changed (and a repack's androeed.ru splash is removed). | `out/costumequest64-original.apk` |
+| **optimized** | Controller support with PC-style battle prompts and Xbox button icons, developer menu (Lua console, FPS counter, frame cap, render resolution), full screen, Game Mode, white menu highlight. | `out/costumequest64.apk` |
+
+One step (fetches the dependencies if needed, decompiles your APK, builds a full APK for phones
+and the emulator; asks for the variant if you leave it out):
+
 ```sh
-scripts/decompile.sh CostumeQuest.apk      # your copy of the game -> work/decompiled
-FULL=1 scripts/build_apk.sh arm64-v8a      # -> out/costumequest64.apk
+scripts/build_cq.sh CostumeQuest.apk original     # or: optimized
+adb install -r --no-incremental out/costumequest64-original.apk
+```
+
+Options: `--split` (small APK + `out/cqdata.zip`, see below), `--abi arm64-v8a` or
+`--abi x86_64` to build for one ABI only.
+
+Step by step:
+
+```sh
+scripts/decompile.sh CostumeQuest.apk                        # your copy of the game -> work/decompiled
+VARIANT=optimized FULL=1 scripts/build_apk.sh arm64-v8a      # -> out/costumequest64.apk
 adb install -r --no-incremental out/costumequest64.apk
 ```
 
+- `VARIANT=original` or `VARIANT=optimized` (the default).
 - `FULL=1` puts the 1 GB data pack into the APK (simplest to install).
 - `SPLIT=1` builds a small APK and writes the data pack to `out/cqdata.zip`; install both with
-  `scripts/install_split.sh out` (needs about half the free space on the phone).
-- ABIs: `arm64-v8a` for phones, `x86_64` for the emulator (both by default).
+  `scripts/install_split.sh out` (`VARIANT=original scripts/install_split.sh out` for the
+  original variant; needs about half the free space on the phone).
+- ABIs: `arm64-v8a` for phones, `x86_64` for the Android emulator (both by default). Both
+  variants run on an x86_64 emulator image (tested on API 36).
 - Developed against an APK that contains the data pack as `assets/ant.mp3`; APKs that ship it as
   a separate OBB expansion file are untested.
 

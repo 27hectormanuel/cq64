@@ -1,6 +1,6 @@
 # Fetched by scripts/fetch_deps.sh
-/third_party/dynarmic/
-/third_party/boost/
+/third_party/dynarmic
+/third_party/boost
 /third_party/apktool.jar
 /third_party/apktool.jar.part
 # Build output and the decompiled game (never commit game files)
