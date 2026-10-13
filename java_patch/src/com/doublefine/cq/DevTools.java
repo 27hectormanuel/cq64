@@ -55,8 +55,6 @@ public final class DevTools {
     static native float nativeFps();
     static native void nativeSetFrameCap(int fps);
     static native void nativePad(int buttons, int lx, int ly, int rx, int ry, int lt, int rt);
-    static native int nativeBattlePrompt();
-    static native void nativeTapColour(int colour);
 
     private static final String[] CAP_LABELS = {"Auto (Game Mode)", "Uncapped", "60 fps", "30 fps"};
     private static final int[] CAP_VALUES = {-1, 0, 60, 30};
@@ -257,88 +255,10 @@ public final class DevTools {
         } else {
             int b = padButton(code);
             if (b < 0) return false;  // e.g. BACK, volume: leave to the system
-            if (b >= PAD_UP && b <= PAD_RIGHT) sDpadKeys = down ? sDpadKeys | (1 << b) : sDpadKeys & ~(1 << b);
-            if (promptButton(b, down, ev.getRepeatCount())) return true;
             sPadKeys = down ? sPadKeys | (1 << b) : sPadKeys & ~(1 << b);
         }
         sendPad();
-        checkSwipe();
         return true;
-    }
-
-    // ---------------------------------------------------------------- battle prompts
-
-    // Battle prompts (timing, mashing, hold meters, swipes) only accept touch on Android. While
-    // one is up, A/B/X/Y touch the screen (held as long as the button; libcqhost judges the
-    // touch by the button's colour, green/red/blue/yellow) and stick/d-pad flicks swipe.
-    private static final int TOUCH_DEVICE = 0x7ad0, TOUCH_FINGER = 7;
-    private static final int SWIPE_STEPS = 4;
-    private static int sTouchButton = -1;  // face button holding the synthetic touch
-    private static int sDpadKeys;          // d-pad bits held, from key events
-    private static int sSwipeDir = -1;     // direction already swiped while held
-    private static java.lang.reflect.Method sNativeTouch;
-
-    private static void touch(int action, float x, float y) {
-        try {
-            if (sNativeTouch == null) {
-                sNativeTouch = Class.forName("org.libsdl.app.SDLActivity").getDeclaredMethod("onNativeTouch",
-                        int.class, int.class, int.class, float.class, float.class, float.class);
-                sNativeTouch.setAccessible(true);
-            }
-            sNativeTouch.invoke(null, TOUCH_DEVICE, TOUCH_FINGER, action, x, y, 1f);
-        } catch (ReflectiveOperationException e) {
-            android.util.Log.e("DevTools", "onNativeTouch", e);
-        }
-    }
-
-    /** Handles A/B/X/Y during a battle prompt; returns true if consumed. */
-    private static boolean promptButton(int b, boolean down, int repeat) {
-        if (b > PAD_Y) return false;
-        if (!down) {
-            if (b != sTouchButton) return false;
-            touch(MotionEvent.ACTION_UP, 0.5f, 0.5f);
-            sTouchButton = -1;
-            // The game judges the touch on its next frame; keep the colour until then.
-            sHandler.postDelayed(CLEAR_TAP_COLOUR, 250);
-            return true;
-        }
-        if (repeat > 0 && b == sTouchButton) return true;
-        if (nativeBattlePrompt() < 0) return false;
-        if (sTouchButton >= 0) touch(MotionEvent.ACTION_UP, 0.5f, 0.5f);
-        sHandler.removeCallbacks(CLEAR_TAP_COLOUR);
-        nativeTapColour(b == PAD_A ? 0 : b == PAD_B ? 1 : b == PAD_X ? 2 : 3);  // green red blue yellow
-        touch(MotionEvent.ACTION_DOWN, 0.5f, 0.5f);
-        sTouchButton = b;
-        return true;
-    }
-
-    private static final Runnable CLEAR_TAP_COLOUR = () -> {
-        if (sTouchButton < 0) nativeTapColour(-1);
-    };
-
-    /** Swipes once per stick/d-pad push during a battle prompt. */
-    private static void checkSwipe() {
-        int dir = -1;  // 0 left, 1 right, 2 up, 3 down
-        if (Math.abs(sLx) > 0.6f || Math.abs(sLy) > 0.6f) {
-            dir = Math.abs(sLx) > Math.abs(sLy) ? (sLx < 0 ? 0 : 1) : (sLy < 0 ? 2 : 3);
-        } else {
-            int dpad = sDpadKeys | sPadHat;
-            if ((dpad & (1 << PAD_LEFT)) != 0) dir = 0;
-            else if ((dpad & (1 << PAD_RIGHT)) != 0) dir = 1;
-            else if ((dpad & (1 << PAD_UP)) != 0) dir = 2;
-            else if ((dpad & (1 << PAD_DOWN)) != 0) dir = 3;
-        }
-        if (dir == sSwipeDir) return;
-        sSwipeDir = dir;
-        if (dir < 0 || sTouchButton >= 0 || nativeBattlePrompt() < 0) return;
-        final float dx = dir == 0 ? -1 : dir == 1 ? 1 : 0, dy = dir == 2 ? -1 : dir == 3 ? 1 : 0;
-        nativeTapColour(-1);
-        touch(MotionEvent.ACTION_DOWN, 0.5f, 0.5f);
-        for (int i = 1; i <= SWIPE_STEPS; i++) {
-            final float f = 0.06f * i;
-            sHandler.postDelayed(() -> touch(MotionEvent.ACTION_MOVE, 0.5f + dx * f, 0.5f + dy * f), 16L * i);
-        }
-        sHandler.postDelayed(() -> touch(MotionEvent.ACTION_UP, 0.5f + dx * 0.24f, 0.5f + dy * 0.24f), 16L * (SWIPE_STEPS + 1));
     }
 
     /** Called for every generic motion event; returns true for controller sticks, triggers and hats. */
@@ -359,7 +279,6 @@ public final class DevTools {
         sPadHat = (hx < -0.5f ? 1 << PAD_LEFT : 0) | (hx > 0.5f ? 1 << PAD_RIGHT : 0)
                 | (hy < -0.5f ? 1 << PAD_UP : 0) | (hy > 0.5f ? 1 << PAD_DOWN : 0);
         sendPad();
-        checkSwipe();
         return true;
     }
 
@@ -391,20 +310,6 @@ public final class DevTools {
             java.io.File console = new java.io.File(sActivity.getFilesDir(), "devconsole");
             if (menu.delete()) showMenu();
             if (console.delete()) showConsole();
-            // adb: echo A > files/padtap  (A/B/X/Y, or AUTO for the prompt's colour) presses a
-            // face button for battle prompts
-            java.io.File tap = new java.io.File(sActivity.getFilesDir(), "padtap");
-            if (tap.exists()) {
-                try {
-                    String k = new String(java.nio.file.Files.readAllBytes(tap.toPath())).trim();
-                    int b = "B".equals(k) ? PAD_B : "X".equals(k) ? PAD_X : "Y".equals(k) ? PAD_Y : PAD_A;
-                    if ("AUTO".equals(k)) b = PAD_A + (nativeBattlePrompt() & 3);
-                    final int button = b;
-                    if (promptButton(button, true, 0)) sHandler.postDelayed(() -> promptButton(button, false, 0), 80);
-                } catch (java.io.IOException ignored) {
-                }
-                tap.delete();
-            }
             sHandler.postDelayed(this, 500);
         }
     };

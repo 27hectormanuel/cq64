@@ -124,6 +124,23 @@ Handy commands include `debug.AcquireAllCostumes()`, `debug.GetAllStamps()`,
 `debug.ToggleSkipCutscenes()`, `cq.WinBattle()`, `cq.StartBattle()` (starts a test battle) and
 `input.IsGamepadMode()`.
 
+## 7. Testing controller input over adb
+
+The host also watches two more files in the app's private storage (same `run-as ... sh -c 'cat >
+files/NAME'` pattern as above):
+
+- `files/pad` — lines of `MASK MILLISECONDS` hold virtual controller buttons in turn (bit 0 = A,
+  1 = B, 2 = X, 3 = Y, 11-14 = d-pad up/down/left/right), e.g. `echo '4 120'` presses X.
+- `files/padauto` — `1` makes the host answer every battle prompt with synthetic controller input
+  (the right face button, a d-pad flick, a press inside the timing window, or a stick wiggle);
+  `1 N` additionally turns every prompt into `BattlePrompt` N (0-3 press, 4-7 swipe, 8-11 mash,
+  12-15 timed press, 16-19 timed swipe, 20 rub); `0 -1` turns both off. Prompt types and results
+  are logged (`adb logcat -s cqhost`). These change how battles play, so switch them off after
+  testing.
+
+If the guest crashes, the register dump and the guest backtrace are also appended to
+`files/crash.log`, since logcat can drop them when the game logs a lot.
+
 ## Caveats
 
 - A few bytes leak per command: the engine `String`'s buffer comes from the game's allocator and

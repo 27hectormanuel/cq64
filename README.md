@@ -32,8 +32,9 @@ Both were tested on a Pixel 8 Pro (Android 17, arm64, Mali GPU).
     package name, which libraries to load, the Java native methods to forward, and game-specific
     extras.
   - Costume Quest extras: a revived Lua debug console, FPS counter and frame cap, 16:9 render
-    resolution picker, game controller support including battle prompts, and small same-size
-    patches applied to the data pack as it is read (white menu highlight).
+    resolution picker, game controller support including battle prompts judged like the PC
+    version, and small patches applied to the data pack as it is read (white menu highlight;
+    a button icon library with the Xbox controller icons added to the mobile ones).
 - **`guest/`** — `libguestrt.so`, a tiny ARM32 runtime (string functions, `printf` family,
   dlmalloc, setjmp, compiler-rt helpers) loaded next to the game in place of 32-bit bionic.
 - **`java_patch/`** — `HostLoader` (loads `libcqhost` instead of the 32-bit libraries) and a
@@ -100,9 +101,12 @@ the phone's `Android/obb/com.doublefine.mmoj/` folder rather than inside the APK
   - **Three-finger tap** opens the developer menu: FPS counter, Lua debug command line, frame
     rate cap and render resolution. How the debug console works, and how to send Lua commands
     over adb: [docs/debug-console.md](docs/debug-console.md).
-  - **Controllers** work everywhere. In battle prompts the coloured icons map to the console
-    buttons: A = green, B = red, X = blue/purple, Y = yellow; flick the stick for swipe prompts.
-    Connect the controller before starting the game.
+  - **Controllers** work everywhere. Battle prompts are played with the buttons, as in the PC
+    version: press, mash or time the button the prompt shows (A = green, B = red, X = blue,
+    Y = yellow), flick the left stick or d-pad for swipe prompts, and wiggle the left stick to
+    rub. After controller input the battle screen shows Xbox button icons and hides the touch
+    targets; touching the screen switches back to the touch layout. Connect the controller
+    before starting the game.
 
 ## Other Double Fine Android apps and 32-bit apps
 
@@ -124,7 +128,7 @@ Contributions adding games are welcome.
 ## Status and known issues
 
 - Costume Quest: a PC mouse-pointer graphic appears on the title screen while a controller is
-  connected; swipe and hold-meter battle prompts are lightly tested with controllers.
+  connected; swipe prompts are lightly tested with controllers (they rarely come up in play).
 - Middle Manager of Justice: experimental — expect bugs past the title screen; no controller
   support or developer menu yet; networking (store, analytics) is stubbed out.
 

@@ -304,12 +304,19 @@ u32 add_thunk(const char *name, ThunkFn fn) {
 const char *thunk_name(u32 id) { return id < g_nthunks.load() ? g_thunks[id].name : "?"; }
 
 void dump_state(GuestThread &t) {
+    // Each line goes to logcat and to the crash log.
+    auto line = [](const char *fmt, auto... args) {
+        char buf[512];
+        snprintf(buf, sizeof buf, fmt, args...);
+        LOGE("%s", buf);
+        crash_note(buf);
+    };
     auto &R = t.jit->Regs();
-    LOGE("guest thread %u state: cpsr=%08x", t.handle, t.jit->Cpsr());
+    line("guest thread %u state: cpsr=%08x", t.handle, t.jit->Cpsr());
     for (int i = 0; i < 16; i += 4)
-        LOGE("  r%-2d=%08x r%-2d=%08x r%-2d=%08x r%-2d=%08x", i, R[i], i + 1, R[i + 1], i + 2, R[i + 2], i + 3, R[i + 3]);
-    LOGE("  pc %s", loader::symbolize(R[15]).c_str());
-    LOGE("  lr %s", loader::symbolize(R[14]).c_str());
+        line("  r%-2d=%08x r%-2d=%08x r%-2d=%08x r%-2d=%08x", i, R[i], i + 1, R[i + 1], i + 2, R[i + 2], i + 3, R[i + 3]);
+    line("  pc %s", loader::symbolize(R[15]).c_str());
+    line("  lr %s", loader::symbolize(R[14]).c_str());
     // Heuristic backtrace: code addresses found on the stack.
     u32 sp = R[13];
     int found = 0;
@@ -318,7 +325,7 @@ void dump_state(GuestThread &t) {
         u32 v = rd<u32>(a);
         Module *m = loader::find_by_addr(v);
         if (m && v - m->base < m->size && m->name != "") {
-            LOGE("  stack[%03x] %s", a - sp, loader::symbolize(v).c_str());
+            line("  stack[%03x] %s", a - sp, loader::symbolize(v).c_str());
             found++;
         }
     }

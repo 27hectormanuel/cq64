@@ -19,6 +19,8 @@ using s64 = int64_t;
 #define LOG_TAG "cqhost"
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO, LOG_TAG, __VA_ARGS__)
 #define LOGW(...) __android_log_print(ANDROID_LOG_WARN, LOG_TAG, __VA_ARGS__)
+// Appends a line to the crash log (files/crash.log), if set up.
+void crash_note(const char *line);
 #define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, LOG_TAG, __VA_ARGS__)
 
 [[noreturn]] void fatal(const char *fmt, ...) __attribute__((format(printf, 1, 2)));

@@ -49,5 +49,5 @@ add_library(cqhost SHARED
     ${GAME_SOURCES}
 )
 target_compile_options(cqhost PRIVATE -Wall -Wno-unused-function -fexceptions)
-target_link_libraries(cqhost PRIVATE dynarmic log android EGL GLESv1_CM GLESv2)
+target_link_libraries(cqhost PRIVATE dynarmic log android EGL GLESv1_CM GLESv2 z)
 target_link_options(cqhost PRIVATE -Wl,--gc-sections -Wl,-z,max-page-size=16384)

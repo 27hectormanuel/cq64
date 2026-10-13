@@ -9,4 +9,8 @@ namespace datapatch {
 void init(const std::string &pack_path);
 // Patches `buf`, just read from host fd `fd` at file offset `pos`, if it covers a patch.
 void apply(int fd, s64 pos, void *buf, s64 n);
+// The data pack member replaced by the generated button icon library (mobile + Xbox icons).
+constexpr const char *ICON_SLOT = "Data/UI/Mobile_InputIcons/Opt/Mobile_InputIcons.gfx";
+// Whether that library was built; its Xbox images then need their textures mapped (gamepad.cpp).
+bool icon_library_ready();
 }  // namespace datapatch
