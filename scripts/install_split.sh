@@ -1,5 +1,5 @@
 #!/bin/bash
-# SPDX-License-Identifier: GPL-3.0-or-later
+# SPDX-License-Identifier: CC0-1.0
 # Install the slim APK and stream the data pack into the app's private storage (no temporary
 # copy on the phone, so this needs ~1.1 GB free instead of the full APK's ~2.5 GB).
 #   ./install_split.sh <dir containing costumequest64.apk and cqdata.zip>

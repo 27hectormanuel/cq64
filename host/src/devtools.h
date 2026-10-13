@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-or-later
+// SPDX-License-Identifier: CC0-1.0
 #pragma once
 // Developer tools: the revived debug command line, fps readout and frame-rate cap.
 #include <jni.h>

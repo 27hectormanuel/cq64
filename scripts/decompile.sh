@@ -1,5 +1,5 @@
 #!/bin/bash
-# SPDX-License-Identifier: GPL-3.0-or-later
+# SPDX-License-Identifier: CC0-1.0
 # Decompiles your copy of the Costume Quest Android APK (v1.1.7, versionCode 121030) into
 # work/decompiled, the input of build_apk.sh.
 #   scripts/decompile.sh CostumeQuest.apk

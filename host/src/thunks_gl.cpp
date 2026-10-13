@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-or-later
+// SPDX-License-Identifier: CC0-1.0
 // OpenGL ES 1.x / 2.0 imports. Arguments are mostly scalars; pointer arguments are guest
 // addresses, except vertex/index "pointers" that are buffer offsets while a VBO is bound.
 #include "abi.h"

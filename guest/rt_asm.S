@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: GPL-3.0-or-later */
+/* SPDX-License-Identifier: CC0-1.0 */
 @ setjmp/longjmp for the guest. Saves r4-r11, sp, lr and d8-d15.
     .syntax unified
     .arm

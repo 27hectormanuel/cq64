@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-or-later
+// SPDX-License-Identifier: CC0-1.0
 #pragma once
 // Gamepad support: libCq's SDL only exposes the accelerometer as a joystick, so its Android
 // joystick backend is replaced with a virtual pad that the Java side (DevTools) feeds from real

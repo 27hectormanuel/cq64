@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-or-later
+// SPDX-License-Identifier: CC0-1.0
 // libandroid imports. ANativeWindow pointers are 64-bit, so the guest gets small handles.
 #include "abi.h"
 #include "devtools.h"

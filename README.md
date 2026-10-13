@@ -90,11 +90,11 @@ prompts are lightly tested with controllers.
 
 ## License
 
-Copyright (C) 2026 27hectormanuel
-
-The code in this repository is licensed under the GNU General Public License v3.0 or later — see
-[LICENSE](LICENSE). Third-party components keep their own licenses — see
-[THIRD_PARTY.md](THIRD_PARTY.md).
+This project is dedicated to the public domain under
+[CC0 1.0 Universal](LICENSE): to the extent possible under law, the authors have waived all
+copyright and related rights to the code in this repository. You can copy, modify and distribute
+it, even commercially, without asking permission. Third-party components keep their own licenses —
+see [THIRD_PARTY.md](THIRD_PARTY.md).
 
 Costume Quest is © Double Fine Productions. This project is not affiliated with or endorsed by
 Double Fine Productions; it only modifies a copy of the game that you supply.

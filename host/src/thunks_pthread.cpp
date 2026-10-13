@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-or-later
+// SPDX-License-Identifier: CC0-1.0
 // pthread / semaphore imports. Guest sync objects are 4-byte words (bionic LP32);
 // we store a handle to a host object in that word, creating it lazily for static initializers.
 #include "abi.h"

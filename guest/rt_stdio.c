@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-or-later
+// SPDX-License-Identifier: CC0-1.0
 // Guest-side formatting (printf/scanf families), ctype tables and libc data objects.
 // Actual I/O goes through host thunks (fwrite, fgetc, ungetc, __android_log_write).
 #include <stdarg.h>

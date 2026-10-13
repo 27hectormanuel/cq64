@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-or-later
+// SPDX-License-Identifier: CC0-1.0
 #pragma once
 // Same-size byte patches to files inside the game's data pack, applied as the game reads them
 // (the pack itself is never modified). See datapatch.cpp for the patch list.

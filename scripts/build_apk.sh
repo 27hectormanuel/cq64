@@ -1,5 +1,5 @@
 #!/bin/bash
-# SPDX-License-Identifier: GPL-3.0-or-later
+# SPDX-License-Identifier: CC0-1.0
 # Builds a 64-bit-capable Costume Quest APK from the apktool decompile (scripts/decompile.sh).
 #   scripts/build_apk.sh [abi...]      default ABIs: arm64-v8a x86_64
 # Output: $OUT_DIR/costumequest64.apk (default out/; signed with the debug key)

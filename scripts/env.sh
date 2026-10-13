@@ -1,4 +1,4 @@
-# SPDX-License-Identifier: GPL-3.0-or-later
+# SPDX-License-Identifier: CC0-1.0
 # Locates the build tools. Sourced by the other scripts; every variable can be overridden.
 #   ANDROID_HOME  Android SDK (default: $ANDROID_SDK_ROOT or ~/Android/Sdk)
 #   NDK           NDK root (default: newest $ANDROID_HOME/ndk/*)

@@ -1,5 +1,5 @@
 #!/bin/bash
-# SPDX-License-Identifier: GPL-3.0-or-later
+# SPDX-License-Identifier: CC0-1.0
 # Development loop: rebuild libcqhost for the connected device's ABI and push it (plus the
 # guest libraries) into the app's files/dev/ directory, which HostLoader prefers.
 # Needs a previous scripts/build_apk.sh for that ABI (it configures build/<abi>).

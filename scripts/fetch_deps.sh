@@ -1,5 +1,5 @@
 #!/bin/bash
-# SPDX-License-Identifier: GPL-3.0-or-later
+# SPDX-License-Identifier: CC0-1.0
 # Downloads the pinned third-party sources into third_party/ (not part of this repository):
 #   dynarmic  ARM32 JIT (azahar-emu fork, 0BSD) and its submodules
 #   Boost     headers used by dynarmic (BSL-1.0)

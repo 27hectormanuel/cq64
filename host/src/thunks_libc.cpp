@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-or-later
+// SPDX-License-Identifier: CC0-1.0
 // Host implementations of libc imports that need the real OS (files, time, math, process).
 // Guest structures follow the 32-bit bionic ABI and are converted field by field.
 #include "abi.h"

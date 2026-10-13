@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-or-later
+// SPDX-License-Identifier: CC0-1.0
 #pragma once
 // Shared definitions for the 64-bit host runtime that runs the 32-bit ARM game code.
 #include <cstdint>

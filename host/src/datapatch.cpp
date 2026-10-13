@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-or-later
+// SPDX-License-Identifier: CC0-1.0
 // Same-size byte patches to files inside the data pack.
 //
 // The game reads its data straight out of assets/ant.mp3 (a zip stored, uncompressed, inside the

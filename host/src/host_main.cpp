@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-or-later
+// SPDX-License-Identifier: CC0-1.0
 // Entry point: loaded by Java in place of libCq/libfmodex/libfmodevent. Boots the emulator,
 // loads the ARM32 libraries and forwards the Java native methods into them.
 #include "abi.h"

@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-or-later
+// SPDX-License-Identifier: CC0-1.0
 // FMOD output selection. FMOD Ex on Android prefers OpenSL ES, which the host does not
 // bridge; its Java AudioTrack output (org.fmod.FMODAudioDevice) works through JNI.
 #include "abi.h"

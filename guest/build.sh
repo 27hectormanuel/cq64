@@ -1,5 +1,5 @@
 #!/bin/bash
-# SPDX-License-Identifier: GPL-3.0-or-later
+# SPDX-License-Identifier: CC0-1.0
 # Builds libguestrt.so: the ARM32 runtime loaded into the emulator alongside the game.
 set -e
 NDK=${NDK:?set NDK to the Android NDK root}

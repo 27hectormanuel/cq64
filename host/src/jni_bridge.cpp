@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-or-later
+// SPDX-License-Identifier: CC0-1.0
 // Guest-facing JNI: a 32-bit JNIEnv/JavaVM whose function tables trap into the host,
 // where each call is translated onto the real (64-bit) JNIEnv.
 #include "jni_bridge.h"

@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-or-later
+// SPDX-License-Identifier: CC0-1.0
 // Developer tools.
 //
 // Debug command line: the retail libCq compiled out console typing (Console::HandleInput is
