@@ -15,6 +15,10 @@ namespace gamepad {
 void install(Module *cq);
 // Holds virtual pad buttons `mask` (bit i = button i, see gamepad.cpp) for `ms` milliseconds.
 void debug_press(u32 mask, int ms);
+// Debug: plays battle prompts automatically with synthetic controller input while on.
+void set_auto(bool on);
+// Debug: makes every battle prompt this BattlePrompt (-1: the game's own).
+void force_prompt(int prompt);
 // Registers com.doublefine.cq.DevTools.nativePad, if that class is present.
 void register_natives(JNIEnv *env);
 }  // namespace gamepad

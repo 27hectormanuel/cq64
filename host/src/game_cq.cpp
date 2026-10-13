@@ -54,7 +54,18 @@ void register_natives(JNIEnv *env) {
 // Debug aids:
 //   echo 'cmd' | adb shell run-as com.doublefine.cq sh -c 'cat > files/console'   runs console commands
 //   echo '1 150' | ... sh -c 'cat > files/pad'   presses virtual pad buttons (mask, ms) in turn
+//   ... sh -c 'echo 1 > files/padauto'   plays battle prompts with synthetic pad input (0: off);
+//                                        'echo 1 5 > ...' also makes every prompt BattlePrompt 5 (-1: off)
 void poll_debug() {
+    const std::string autof = files_dir() + "/padauto";
+    if (FILE *f = fopen(autof.c_str(), "r")) {
+        int on = 0;
+        if (fscanf(f, "%d", &on) == 1) gamepad::set_auto(on != 0), LOGI("gamepad: auto prompts %s", on ? "on" : "off");
+        int forced;
+        if (fscanf(f, "%d", &forced) == 1) gamepad::force_prompt(forced), LOGI("gamepad: forced prompt %d", forced);
+        fclose(f);
+        unlink(autof.c_str());
+    }
     const std::string pad = files_dir() + "/pad", console = files_dir() + "/console";
     if (FILE *f = fopen(pad.c_str(), "r")) {
         unsigned mask;

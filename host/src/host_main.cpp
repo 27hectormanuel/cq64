@@ -105,6 +105,8 @@ extern "C" JNIEXPORT jint JNI_OnLoad(JavaVM *vm, void *) {
         paths::add_mapping("/proc/cpuinfo", cpuinfo);
     }
 
+    // Guest crash reports also go to files/crash.log: logcat can drop them when the game logs a lot.
+    setenv("CQ_CRASH_LOG", (game::files_dir() + "/crash.log").c_str(), 1);
     game::setup();
 
     // The ARM32 libraries ship next to us, renamed so the installer treats them as plain files.

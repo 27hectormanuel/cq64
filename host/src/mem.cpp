@@ -25,6 +25,15 @@
 
 u8 *g_base;
 
+void crash_note(const char *line) {
+    const char *path = getenv("CQ_CRASH_LOG");
+    if (!path) return;
+    if (FILE *f = fopen(path, "a")) {
+        fprintf(f, "%s\n", line);
+        fclose(f);
+    }
+}
+
 void fatal(const char *fmt, ...) {
     char buf[1024];
     va_list ap;
@@ -32,6 +41,7 @@ void fatal(const char *fmt, ...) {
     vsnprintf(buf, sizeof buf, fmt, ap);
     va_end(ap);
     __android_log_write(ANDROID_LOG_FATAL, LOG_TAG, buf);
+    crash_note(buf);
     abort();
 }
 
