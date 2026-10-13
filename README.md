@@ -78,6 +78,8 @@ that ship it as a separate OBB expansion file are untested.
 - Install with `adb install -r --no-incremental out/costumequest64.apk` (`-r` keeps your saves).
 - **Three-finger tap** opens the developer menu: FPS counter, Lua debug command line, frame rate
   cap (follows Android Game Mode by default) and render resolution.
+  How the debug console works, and how to send Lua commands over adb:
+  [docs/debug-console.md](docs/debug-console.md).
 - **Controllers** work everywhere. In battle prompts the coloured icons map to the console
   buttons: A = green, B = red, X = blue/purple, Y = yellow; flick the stick for swipe prompts.
   Connect the controller before starting the game.
