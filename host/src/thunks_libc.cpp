@@ -8,7 +8,11 @@
 #include <dirent.h>
 #include <dlfcn.h>
 #include <fcntl.h>
+#include <arpa/inet.h>
 #include <math.h>
+#include <poll.h>
+#include <wchar.h>
+#include <wctype.h>
 #include <pwd.h>
 #include <sched.h>
 #include <signal.h>
@@ -21,6 +25,7 @@
 #include <unistd.h>
 #include <utime.h>
 
+#include <atomic>
 #include <cerrno>
 #include <cstdio>
 #include <cstdlib>
@@ -82,6 +87,16 @@ void sync_flags(u32 gf, FILE *f) {
     wr<u16>(gf + 12, fl);
 }
 
+// Wraps a host FILE in a guest FILE (only _file, at offset 14, is read by guest code).
+u32 guest_file(FILE *f) {
+    if (!f) return fail(), 0;
+    u32 gf = mem::halloc(GFILE_SIZE);
+    wr<s16>(gf + 14, (s16)fileno(f));
+    std::lock_guard<std::mutex> lk(g_files_lock);
+    g_files[gf] = f;
+    return gf;
+}
+
 u32 t_fopen(G<const char> path, G<const char> mode) {
     std::string p = paths::translate(path);
     FILE *f = fopen(p.c_str(), mode);
@@ -89,11 +104,7 @@ u32 t_fopen(G<const char> path, G<const char> mode) {
         LOGI("fopen(%s, %s) failed: %s", p.c_str(), mode.get(), strerror(errno));
         return fail(), 0;
     }
-    u32 gf = mem::halloc(GFILE_SIZE);
-    wr<s16>(gf + 14, (s16)fileno(f));
-    std::lock_guard<std::mutex> lk(g_files_lock);
-    g_files[gf] = f;
-    return gf;
+    return guest_file(f);
 }
 THUNK(fopen, t_fopen);
 
@@ -883,6 +894,207 @@ u32 t_inet_ntoa(u32 in) {
     return buf;
 }
 THUNK(inet_ntoa, t_inet_ntoa);
+
+// ---------------------------------------------------------------- added for Moai games (MMoJ)
+
+// time
+u32 t_gmtime_r(u32 tp, u32 out) {
+    time_t t = rd<s32>(tp);
+    struct tm h;
+    gmtime_r(&t, &h);
+    put_tm(out, h);
+    return out;
+}
+THUNK(gmtime_r, t_gmtime_r);
+
+// strings
+u32 t_strtok_r(u32 str, G<const char> delim, u32 save) {
+    u32 p = str ? str : rd<u32>(save);
+    if (!p) return 0;
+    const char *d = delim;
+    while (rd<char>(p) && strchr(d, rd<char>(p))) p++;  // skip leading delimiters
+    if (!rd<char>(p)) {
+        wr<u32>(save, 0);
+        return 0;
+    }
+    u32 tok = p;
+    while (rd<char>(p) && !strchr(d, rd<char>(p))) p++;
+    if (rd<char>(p)) {
+        wr<char>(p, 0);
+        wr<u32>(save, p + 1);
+    } else {
+        wr<u32>(save, 0);
+    }
+    return tok;
+}
+THUNK(strtok_r, t_strtok_r);
+u32 t_strxfrm(G<char> dst, G<const char> src, u32 n) { return (u32)strxfrm(dst.a ? dst.get() : nullptr, src, n); }
+THUNK(strxfrm, t_strxfrm);
+u32 t_basename(G<const char> path) {
+    thread_local u32 buf = mem::halloc(4096);
+    std::string p = path.a ? path.get() : "";
+    while (p.size() > 1 && p.back() == '/') p.pop_back();
+    size_t i = p.rfind('/');
+    std::string b = p.empty() ? "." : (i == std::string::npos || p == "/") ? p : p.substr(i + 1);
+    snprintf((char *)g2h(buf), 4096, "%s", b.c_str());
+    return buf;
+}
+THUNK(basename, t_basename);
+
+// wide characters (wchar_t is 32 bits on both sides; mbstate_t is 4 bytes in the guest)
+struct GuestMbstate {
+    u32 g;
+    mbstate_t h{};
+    explicit GuestMbstate(u32 g) : g(g) { if (g) memcpy(&h, g2h(g), 4); }
+    ~GuestMbstate() { if (g) memcpy(g2h(g), &h, 4); }
+};
+u32 t_mbrtowc(G<wchar_t> pwc, G<const char> s, u32 n, u32 ps) {
+    static thread_local u32 internal = mem::halloc(4);
+    GuestMbstate st(ps ? ps : internal);
+    return (u32)mbrtowc(pwc.a ? pwc.get() : nullptr, s.a ? s.get() : nullptr, n, &st.h);
+}
+THUNK(mbrtowc, t_mbrtowc);
+u32 t_wcrtomb(G<char> s, s32 wc, u32 ps) {
+    static thread_local u32 internal = mem::halloc(4);
+    GuestMbstate st(ps ? ps : internal);
+    return (u32)wcrtomb(s.a ? s.get() : nullptr, (wchar_t)wc, &st.h);
+}
+THUNK(wcrtomb, t_wcrtomb);
+u32 t_btowc(int c) { return (u32)btowc(c); } THUNK(btowc, t_btowc);
+int t_wctob(u32 c) { return wctob((wint_t)c); } THUNK(wctob, t_wctob);
+u32 t_towlower(u32 c) { return (u32)towlower((wint_t)c); } THUNK(towlower, t_towlower);
+u32 t_towupper(u32 c) { return (u32)towupper((wint_t)c); } THUNK(towupper, t_towupper);
+u32 t_wctype(G<const char> name) { return (u32)wctype(name); } THUNK(wctype, t_wctype);
+int t_iswctype(u32 c, u32 type) { return iswctype((wint_t)c, (wctype_t)type); } THUNK(iswctype, t_iswctype);
+int t_wcscoll(G<const wchar_t> a, G<const wchar_t> b) { return wcscoll(a, b); } THUNK(wcscoll, t_wcscoll);
+u32 t_wcsxfrm(G<wchar_t> d, G<const wchar_t> s, u32 n) { return (u32)wcsxfrm(d.a ? d.get() : nullptr, s, n); }
+THUNK(wcsxfrm, t_wcsxfrm);
+u32 t_wcsftime(G<wchar_t> s, u32 max, G<const wchar_t> fmt, u32 tmp) {
+    struct tm t = get_tm(tmp);
+    return (u32)wcsftime(s, max, fmt, &t);
+}
+THUNK(wcsftime, t_wcsftime);
+u32 t_wmemchr(u32 s, s32 c, u32 n) {
+    const wchar_t *p = wmemchr((const wchar_t *)g2h(s), (wchar_t)c, n);
+    return p ? h2g(p) : 0;
+}
+THUNK(wmemchr, t_wmemchr);
+int t_wmemcmp(G<const wchar_t> a, G<const wchar_t> b, u32 n) { return wmemcmp(a, b, n); } THUNK(wmemcmp, t_wmemcmp);
+u32 t_wmemcpy(u32 d, G<const wchar_t> s, u32 n) { wmemcpy((wchar_t *)g2h(d), s, n); return d; } THUNK(wmemcpy, t_wmemcpy);
+u32 t_wmemmove(u32 d, G<const wchar_t> s, u32 n) { wmemmove((wchar_t *)g2h(d), s, n); return d; } THUNK(wmemmove, t_wmemmove);
+u32 t_wmemset(u32 d, s32 c, u32 n) { wmemset((wchar_t *)g2h(d), (wchar_t)c, n); return d; } THUNK(wmemset, t_wmemset);
+u32 t_getwc(u32 gf) {
+    FILE *f = hfile(gf);
+    if (!f) return (u32)WEOF;
+    wint_t r = fgetwc(f);
+    sync_flags(gf, f);
+    return (u32)r;
+}
+THUNK(getwc, t_getwc);
+u32 t_putwc(u32 c, u32 gf) {
+    FILE *f = hfile(gf);
+    return f ? (u32)fputwc((wchar_t)c, f) : (u32)WEOF;
+}
+THUNK(putwc, t_putwc);
+u32 t_ungetwc(u32 c, u32 gf) {
+    FILE *f = hfile(gf);
+    return f ? (u32)ungetwc((wint_t)c, f) : (u32)WEOF;
+}
+THUNK(ungetwc, t_ungetwc);
+
+// stdio
+THUNK(putc, t_fputc);
+void t_clearerr(u32 gf) {
+    if (FILE *f = hfile(gf)) {
+        clearerr(f);
+        sync_flags(gf, f);
+    }
+}
+THUNK(clearerr, t_clearerr);
+void t_setbuf(u32, u32) {}  // host buffering is kept
+THUNK(setbuf, t_setbuf);
+u32 t_fdopen(int fd, G<const char> mode) { return guest_file(fdopen(fd, mode)); }
+THUNK(fdopen, t_fdopen);
+u32 t_freopen(G<const char> path, G<const char> mode, u32 gf) {
+    FILE *f = hfile(gf);
+    if (!f) return fail(EBADF), 0;
+    std::string p = path.a ? paths::translate(path) : std::string();
+    if (!freopen(path.a ? p.c_str() : nullptr, mode, f)) return fail(), 0;
+    wr<s16>(gf + 14, (s16)fileno(f));
+    return gf;
+}
+THUNK(freopen, t_freopen);
+u32 t_tmpfile() { return guest_file(tmpfile()); }
+THUNK(tmpfile, t_tmpfile);
+u32 t_tmpnam(u32 buf) {
+    thread_local u32 own = mem::halloc(64);
+    static std::atomic<int> n{0};
+    u32 out = buf ? buf : own;
+    snprintf((char *)g2h(out), 20, "/data/local/tmp/t%d", n++);
+    return out;
+}
+THUNK(tmpnam, t_tmpnam);
+u32 t_popen(G<const char> cmd, G<const char> mode) { return guest_file(popen(cmd, mode)); }
+THUNK(popen, t_popen);
+int t_pclose(u32 gf) {
+    FILE *f;
+    {
+        std::lock_guard<std::mutex> lk(g_files_lock);
+        auto it = g_files.find(gf);
+        if (it == g_files.end()) return fail(EBADF);
+        f = it->second;
+        g_files.erase(it);
+    }
+    mem::hfree(gf);
+    return pclose(f);
+}
+THUNK(pclose, t_pclose);
+
+// process / file system
+u32 t_getcwd(u32 buf, u32 size) {
+    char tmp[4096];
+    if (!getcwd(tmp, sizeof tmp)) return fail(), 0;
+    size_t n = strlen(tmp) + 1;
+    if (!buf) {
+        buf = mem::halloc(size > n ? size : (u32)n);
+    } else if (n > size) {
+        return fail(ERANGE), 0;
+    }
+    memcpy(g2h(buf), tmp, n);
+    return buf;
+}
+THUNK(getcwd, t_getcwd);
+int t_chdir(G<const char> path) { return check(chdir(paths::translate(path).c_str())); }
+THUNK(chdir, t_chdir);
+u32 t_getgid() { return getgid(); } THUNK(getgid, t_getgid);
+u32 t_getegid() { return getegid(); } THUNK(getegid, t_getegid);
+u32 t_alarm(u32 s) { return alarm(s); } THUNK(alarm, t_alarm);
+// struct pollfd is {int fd; short events, revents;} on both sides.
+int t_poll(G<struct pollfd> fds, u32 n, int timeout) { return check(poll(fds, n, timeout)); }
+THUNK(poll, t_poll);
+
+// networking: sockets are not supported (the game only uses them for analytics and store features)
+int t_getaddrinfo(u32, u32, u32, u32 res) {
+    if (res) wr<u32>(res, 0);
+    return 4;  // EAI_FAIL
+}
+THUNK(getaddrinfo, t_getaddrinfo);
+void t_freeaddrinfo(u32) {}
+THUNK(freeaddrinfo, t_freeaddrinfo);
+int t_getsockopt(int, int, int, u32, u32) { return fail(EBADF); }
+THUNK(getsockopt, t_getsockopt);
+int t_shutdown(int, int) { return fail(EBADF); }
+THUNK(shutdown, t_shutdown);
+u32 t_inet_ntop(int af, G<const void> src, u32 dst, u32 size) {
+    if (af == 2 /* AF_INET */) return inet_ntop(AF_INET, src, (char *)g2h(dst), size) ? dst : 0;
+    return fail(EAFNOSUPPORT), 0;
+}
+THUNK(inet_ntop, t_inet_ntop);
+int t_inet_pton(int af, G<const char> src, G<void> dst) {
+    if (af == 2) return inet_pton(AF_INET, src, dst);
+    return fail(EAFNOSUPPORT);
+}
+THUNK(inet_pton, t_inet_pton);
 }  // namespace
 
 namespace libc_host {

@@ -16,6 +16,7 @@
 #include "devtools.h"
 
 #include "abi.h"
+#include "game.h"
 
 #include <atomic>
 #include <cstdio>
@@ -42,7 +43,7 @@ void output(const std::string &line) {
         g_out += '\n';
         if (g_out.size() > 16384) g_out.erase(0, g_out.size() - 16384);
     }
-    if (FILE *f = fopen("/data/data/com.doublefine.cq/files/console.out", "a")) {
+    if (FILE *f = fopen((game::files_dir() + "/console.out").c_str(), "a")) {
         fprintf(f, "%s\n", line.c_str());
         fclose(f);
     }
@@ -55,9 +56,12 @@ u32 sym(const char *module, const char *name) {
     return a;
 }
 
+// The game library (last in the profile's list), which hosts the engine's console and Lua.
+const char *game_lib() { return game::kLibs.back().soname; }
+
 // lua_CFunction: hostprint(text)
 s32 t_hostprint(u32 L) {
-    static const u32 tolstring = sym("libCq.so", "lua_tolstring");
+    static const u32 tolstring = sym(game_lib(), "lua_tolstring");
     u32 len = mem::halloc(4);
     u32 p = cpu::call32(tolstring, {L, 1, len});
     output(p ? std::string((const char *)g2h(p), rd<u32>(len)) : "(nil)");
@@ -86,21 +90,27 @@ std::string wrap(const std::string &cmd) {
 
 void run_queued() {
     std::deque<std::string> cmds;
-    u32 console = rd<u32>(sym("libCq.so", "g_pConsole"));
+    // Only Double Fine's own engine (Costume Quest) has this console.
+    static const u32 console_ptr = [] {
+        Module *m = loader::find(game_lib());
+        return m ? loader::lookup_in(m, "g_pConsole") : 0u;
+    }();
+    if (!console_ptr) return;
+    u32 console = rd<u32>(console_ptr);
     {
         std::lock_guard<std::mutex> lk(g_lock);
         if (g_queue.empty() || !console) return;  // commands wait for the console to exist
         cmds.swap(g_queue);
     }
-    static const u32 copy = sym("libCq.so", "_ZN6String4CopyEPKci");
-    static const u32 exec = sym("libCq.so", "_ZN7Console14ExecuteCommandERK6Stringi");
+    static const u32 copy = sym(game_lib(), "_ZN6String4CopyEPKci");
+    static const u32 exec = sym(game_lib(), "_ZN7Console14ExecuteCommandERK6Stringi");
     static bool registered = false;
     if (!registered) {  // _G.hostprint = <host thunk>
         u32 L = rd<u32>(console + 0x18);
         u32 fn = cpu::add_thunk("hostprint", &abi::wrapped<t_hostprint>);
         u32 name = mem::hstrdup("hostprint");
-        cpu::call32(sym("libCq.so", "lua_pushcclosure"), {L, fn, 0});
-        cpu::call32(sym("libCq.so", "lua_setfield"), {L, (u32)-10002, name});  // LUA_GLOBALSINDEX
+        cpu::call32(sym(game_lib(), "lua_pushcclosure"), {L, fn, 0});
+        cpu::call32(sym(game_lib(), "lua_setfield"), {L, (u32)-10002, name});  // LUA_GLOBALSINDEX
         mem::hfree(name);
         registered = true;
     }
@@ -182,8 +192,10 @@ void frame_presented() {
 }
 
 void register_natives(JNIEnv *env) {
-    unlink("/data/data/com.doublefine.cq/files/console.out");  // one session's output at a time
-    jclass c = env->FindClass("com/doublefine/cq/DevTools");
+    unlink((game::files_dir() + "/console.out").c_str());  // one session's output at a time
+    std::string cls = game::kPackage;
+    for (char &ch : cls) if (ch == '.') ch = '/';
+    jclass c = env->FindClass((cls + "/DevTools").c_str());
     if (!c) {
         env->ExceptionClear();
         return;

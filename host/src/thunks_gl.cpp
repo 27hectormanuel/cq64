@@ -8,6 +8,7 @@
 #include <GLES/glext.h>
 #include <GLES2/gl2.h>
 
+#include <algorithm>
 #include <mutex>
 #include <unordered_map>
 #include <vector>
@@ -142,7 +143,96 @@ void t_glClearStencil(GLint s) { glClearStencil(s); } THUNK(glClearStencil, t_gl
 void t_glColor4f(float r, float g, float b, float a) { glColor4f(r, g, b, a); } THUNK(glColor4f, t_glColor4f);
 void t_glColorMask(GLboolean r, GLboolean g, GLboolean b, GLboolean a) { glColorMask(r, g, b, a); } THUNK(glColorMask, t_glColorMask);
 void t_glCompileShader(GLuint s) { glCompileShader(s); } THUNK(glCompileShader, t_glCompileShader);
-void t_glCompressedTexImage2D(GLenum t, GLint l, GLenum f, GLsizei w, GLsizei h, GLint b, GLsizei s, P(const void) d) { glCompressedTexImage2D(t, l, f, w, h, b, s, d); } THUNK(glCompressedTexImage2D, t_glCompressedTexImage2D);
+// ---- ATC (ATI/AMD texture compression) fallback
+// Some games ship only ATC textures (GL_AMD_compressed_ATC_texture, Qualcomm Adreno only). On
+// other GPUs they are decoded to RGBA8 here and uploaded uncompressed.
+constexpr GLenum ATC_RGB = 0x8C92, ATC_RGBA_EXPLICIT = 0x8C93, ATC_RGBA_INTERPOLATED = 0x87EE;
+bool is_atc(GLenum f) { return f == ATC_RGB || f == ATC_RGBA_EXPLICIT || f == ATC_RGBA_INTERPOLATED; }
+bool gpu_has_atc() {
+    static const bool has = [] {
+        const char *e = (const char *)glGetString(GL_EXTENSIONS);
+        return e && strstr(e, "GL_AMD_compressed_ATC_texture");
+    }();
+    return has;
+}
+inline u8 bits5(u32 x) { x &= 31; return (u8)((x << 3) | (x >> 2)); }
+inline u8 bits6(u32 x) { x &= 63; return (u8)((x << 2) | (x >> 4)); }
+// One 8-byte ATC colour block -> 16 RGBA pixels (alpha left untouched).
+void atc_colors(const u8 *b, u8 (*px)[4]) {
+    u32 c0 = b[0] | b[1] << 8, c1 = b[2] | b[3] << 8;
+    u8 c[4][3];
+    const u8 col0[3] = {bits5(c0 >> 10), bits5(c0 >> 5), bits5(c0)};  // 555, top bit = mode
+    const u8 col1[3] = {bits5(c1 >> 11), bits6(c1 >> 5), bits5(c1)};  // 565
+    for (int k = 0; k < 3; k++) {
+        if (!(c0 & 0x8000)) {
+            c[0][k] = col0[k];
+            c[1][k] = (u8)((5 * col0[k] + 3 * col1[k]) / 8);
+            c[2][k] = (u8)((3 * col0[k] + 5 * col1[k]) / 8);
+            c[3][k] = col1[k];
+        } else {
+            c[0][k] = 0;
+            c[1][k] = (u8)std::max(0, col0[k] - col1[k] / 4);
+            c[2][k] = col0[k];
+            c[3][k] = col1[k];
+        }
+    }
+    u32 idx = b[4] | b[5] << 8 | b[6] << 16 | (u32)b[7] << 24;
+    for (int i = 0; i < 16; i++) memcpy(px[i], c[(idx >> (2 * i)) & 3], 3);
+}
+// Decodes a w x h ATC image to RGBA8.
+std::vector<u8> atc_decode(GLenum f, int w, int h, const u8 *src) {
+    std::vector<u8> out((size_t)w * h * 4);
+    const int bw = (w + 3) / 4, bh = (h + 3) / 4, bsize = f == ATC_RGB ? 8 : 16;
+    u8 px[16][4];
+    for (int by = 0; by < bh; by++)
+        for (int bx = 0; bx < bw; bx++, src += bsize) {
+            if (f == ATC_RGB) {
+                atc_colors(src, px);
+                for (auto &p : px) p[3] = 255;
+            } else {
+                atc_colors(src + 8, px);
+                if (f == ATC_RGBA_EXPLICIT) {
+                    for (int i = 0; i < 16; i++) px[i][3] = (u8)(((src[i / 2] >> (4 * (i & 1))) & 15) * 17);
+                } else {  // interpolated alpha, as in DXT5
+                    u8 a[8] = {src[0], src[1]};
+                    if (a[0] > a[1])
+                        for (int i = 1; i < 7; i++) a[i + 1] = (u8)(((7 - i) * a[0] + i * a[1]) / 7);
+                    else {
+                        for (int i = 1; i < 5; i++) a[i + 1] = (u8)(((5 - i) * a[0] + i * a[1]) / 5);
+                        a[6] = 0;
+                        a[7] = 255;
+                    }
+                    u64 bits = 0;
+                    for (int i = 0; i < 6; i++) bits |= (u64)src[2 + i] << (8 * i);
+                    for (int i = 0; i < 16; i++) px[i][3] = a[(bits >> (3 * i)) & 7];
+                }
+            }
+            for (int i = 0; i < 16; i++) {
+                int x = bx * 4 + (i & 3), y = by * 4 + (i >> 2);
+                if (x < w && y < h) memcpy(&out[((size_t)y * w + x) * 4], px[i], 4);
+            }
+        }
+    return out;
+}
+
+void t_glCompressedTexImage2D(GLenum t, GLint l, GLenum f, GLsizei w, GLsizei h, GLint b, GLsizei s, P(const void) d) {
+    if (is_atc(f) && !gpu_has_atc() && d) {
+        std::vector<u8> rgba = atc_decode(f, w, h, (const u8 *)d.get());
+        glTexImage2D(t, l, GL_RGBA, w, h, b, GL_RGBA, GL_UNSIGNED_BYTE, rgba.data());
+        return;
+    }
+    glCompressedTexImage2D(t, l, f, w, h, b, s, d);
+}
+THUNK(glCompressedTexImage2D, t_glCompressedTexImage2D);
+void t_glCompressedTexSubImage2D(GLenum t, GLint l, GLint x, GLint y, GLsizei w, GLsizei h, GLenum f, GLsizei s, P(const void) d) {
+    if (is_atc(f) && !gpu_has_atc() && d) {
+        std::vector<u8> rgba = atc_decode(f, w, h, (const u8 *)d.get());
+        glTexSubImage2D(t, l, x, y, w, h, GL_RGBA, GL_UNSIGNED_BYTE, rgba.data());
+        return;
+    }
+    glCompressedTexSubImage2D(t, l, x, y, w, h, f, s, d);
+}
+THUNK(glCompressedTexSubImage2D, t_glCompressedTexSubImage2D);
 void t_glCopyTexSubImage2D(GLenum t, GLint l, GLint xo, GLint yo, GLint x, GLint y, GLsizei w, GLsizei h) { glCopyTexSubImage2D(t, l, xo, yo, x, y, w, h); } THUNK(glCopyTexSubImage2D, t_glCopyTexSubImage2D);
 GLuint t_glCreateProgram() { return glCreateProgram(); } THUNK(glCreateProgram, t_glCreateProgram);
 GLuint t_glCreateShader(GLenum t) { return glCreateShader(t); } THUNK(glCreateShader, t_glCreateShader);
@@ -213,6 +303,12 @@ void t_glTexParameteriv(GLenum t, GLenum p, P(const GLint) v) { glTexParameteriv
 void t_glTexSubImage2D(GLenum t, GLint l, GLint x, GLint y, GLsizei w, GLsizei h, GLenum f, GLenum ty, P(const void) d) { glTexSubImage2D(t, l, x, y, w, h, f, ty, d); } THUNK(glTexSubImage2D, t_glTexSubImage2D);
 void t_glTranslatef(float x, float y, float z) { glTranslatef(x, y, z); } THUNK(glTranslatef, t_glTranslatef);
 void t_glUniform1i(GLint l, GLint v) { glUniform1i(l, v); } THUNK(glUniform1i, t_glUniform1i);
+void t_glUniform1f(GLint l, GLfloat v) { glUniform1f(l, v); } THUNK(glUniform1f, t_glUniform1f);
+void t_glUniform2fv(GLint l, GLsizei n, P(const GLfloat) v) { glUniform2fv(l, n, v); } THUNK(glUniform2fv, t_glUniform2fv);
+void t_glUniform3fv(GLint l, GLsizei n, P(const GLfloat) v) { glUniform3fv(l, n, v); } THUNK(glUniform3fv, t_glUniform3fv);
+void t_glValidateProgram(GLuint p) { glValidateProgram(p); } THUNK(glValidateProgram, t_glValidateProgram);
+void t_glBlendEquation(GLenum m) { glBlendEquation(m); } THUNK(glBlendEquation, t_glBlendEquation);
+void t_glPointSize(GLfloat s) { glPointSize(s); } THUNK(glPointSize, t_glPointSize);
 void t_glUniform1iv(GLint l, GLsizei n, P(const GLint) v) { glUniform1iv(l, n, v); } THUNK(glUniform1iv, t_glUniform1iv);
 void t_glUniform4f(GLint l, float a, float b, float c, float d) { glUniform4f(l, a, b, c, d); } THUNK(glUniform4f, t_glUniform4f);
 void t_glUniform4fv(GLint l, GLsizei n, P(const GLfloat) v) { glUniform4fv(l, n, v); } THUNK(glUniform4fv, t_glUniform4fv);

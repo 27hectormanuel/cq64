@@ -11,6 +11,7 @@
 `scripts/fetch_deps.sh` pins the exact dynarmic commit and checks the SHA-256 of the Boost and
 Apktool downloads.
 
-The game itself — `libCq.so`, the FMOD Ex libraries, the Java code and the data pack — belongs to
-Double Fine Productions and its licensors and is **not** part of this project. You need your own
-copy of the game to build anything.
+The games themselves — Costume Quest's `libCq.so`, Middle Manager of Justice's `libmmoj.so` (built
+on the Moai SDK), the FMOD Ex libraries, their Java code and data packs — belong to Double Fine
+Productions and their licensors and are **not** part of this project. You need your own copy of a
+game to build anything.

@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: CC0-1.0
 # Development loop: rebuild libcqhost for the connected device's ABI and push it (plus the
 # guest libraries) into the app's files/dev/ directory, which HostLoader prefers.
-# Needs a previous scripts/build_apk.sh for that ABI (it configures build/<abi>).
+# Costume Quest only. Needs a previous scripts/build_apk.sh for that ABI (it configures build/cq-<abi>).
 #   scripts/dev_push.sh [--run]
 set -euo pipefail
 source "$(dirname "$0")/env.sh"
@@ -10,7 +10,7 @@ HERE=$ROOT
 PKG=com.doublefine.cq
 
 abi=$(adb shell getprop ro.product.cpu.abi | tr -d '\r')
-bdir=$HERE/build/$abi
+bdir=$HERE/build/cq-$abi
 NDK=$NDK "$HERE/guest/build.sh" "$HERE/out" >/dev/null
 cmake --build "$bdir" -j"$(nproc)" | grep -E "error|FAILED" -A5 || true
 [ -f "$bdir/libcqhost.so" ] || exit 1

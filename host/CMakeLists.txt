@@ -18,6 +18,14 @@ set(Boost_INCLUDE_DIR ${TP}/boost CACHE PATH "" FORCE)
 set(CMAKE_FIND_ROOT_PATH_MODE_INCLUDE BOTH)
 add_subdirectory(${TP}/dynarmic dynarmic EXCLUDE_FROM_ALL)
 
+# Game profile: cq (Costume Quest) or mmoj (Middle Manager of Justice).
+set(GAME cq CACHE STRING "Game profile to build")
+set_property(CACHE GAME PROPERTY STRINGS cq mmoj)
+set(GAME_SOURCES src/game_${GAME}.cpp)
+if(GAME STREQUAL "cq")
+    list(APPEND GAME_SOURCES src/gamepad.cpp src/gamepad.h)
+endif()
+
 add_library(cqhost SHARED
     src/abi.h
     src/common.h
@@ -26,18 +34,19 @@ add_library(cqhost SHARED
     src/datapatch.h
     src/devtools.cpp
     src/devtools.h
-    src/gamepad.cpp
-    src/gamepad.h
+    src/game.h
     src/host_main.cpp
     src/jni_bridge.cpp
     src/loader.cpp
     src/mem.cpp
+    src/natives.h
     src/paths.cpp
     src/thunks_android.cpp
     src/thunks_fmod.cpp
     src/thunks_gl.cpp
     src/thunks_libc.cpp
     src/thunks_pthread.cpp
+    ${GAME_SOURCES}
 )
 target_compile_options(cqhost PRIVATE -Wall -Wno-unused-function -fexceptions)
 target_link_libraries(cqhost PRIVATE dynarmic log android EGL GLESv1_CM GLESv2)

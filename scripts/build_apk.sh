@@ -23,11 +23,11 @@ NDK=$NDK "$HERE/guest/build.sh" "$OUT_DIR"
 
 for abi in "${ABIS[@]}"; do
     echo "== host library ($abi)"
-    bdir=$HERE/build/$abi
+    bdir=$HERE/build/cq-$abi
     if [ ! -f "$bdir/build.ninja" ]; then
         cmake -S "$HERE/host" -B "$bdir" -G Ninja -DCMAKE_TOOLCHAIN_FILE="$NDK/build/cmake/android.toolchain.cmake" \
             -DANDROID_ABI="$abi" -DANDROID_PLATFORM=26 -DCMAKE_BUILD_TYPE=RelWithDebInfo \
-            -DCMAKE_POLICY_VERSION_MINIMUM=3.5 >/dev/null
+            -DCMAKE_POLICY_VERSION_MINIMUM=3.5 -DGAME=cq >/dev/null
     fi
     cmake --build "$bdir" -j"$(nproc)"
 done
@@ -180,7 +180,7 @@ open(p, "w").write(s)
 EOF
 
 for abi in "${ABIS[@]}"; do
-    bdir=$HERE/build/$abi
+    bdir=$HERE/build/cq-$abi
     d=$STAGE/lib/$abi
     mkdir -p "$d"
     "$STRIP" -o "$d/libcqhost.so" "$bdir/libcqhost.so"

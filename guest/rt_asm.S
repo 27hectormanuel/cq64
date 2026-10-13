@@ -35,3 +35,14 @@ longjmp:
     .type _longjmp, %function
 _longjmp:
     b longjmp
+
+@ sigsetjmp/siglongjmp: the signal mask is not emulated, so they are setjmp/longjmp.
+    .globl sigsetjmp
+    .type sigsetjmp, %function
+sigsetjmp:
+    b setjmp
+
+    .globl siglongjmp
+    .type siglongjmp, %function
+siglongjmp:
+    b longjmp

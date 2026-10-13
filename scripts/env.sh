@@ -22,8 +22,10 @@ if [ -z "${CMAKE_BIN:-}" ] && [ -d "$ANDROID_HOME/cmake" ]; then
 fi
 [ -n "${CMAKE_BIN:-}" ] && export PATH=$CMAKE_BIN:$PATH
 
-# Where the decompiled game lives (scripts/decompile.sh writes it there).
+# Where the decompiled games live (scripts/decompile.sh, scripts/decompile_mmoj.sh write them).
 DECOMP=${DECOMP:-$ROOT/work/decompiled}
+MMOJ_WORK=${MMOJ_WORK:-$ROOT/work/mmoj}
+DECOMP_MMOJ=${DECOMP_MMOJ:-$MMOJ_WORK/decompiled}
 TP=$ROOT/third_party
 
 require() {
