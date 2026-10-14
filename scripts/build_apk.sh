@@ -22,7 +22,7 @@ case "$VARIANT" in optimized) APK_NAME=costumequest64.apk ;; original) APK_NAME=
     *) echo "VARIANT must be optimized or original" >&2; exit 1 ;; esac
 ABIS=("$@")
 [ ${#ABIS[@]} -eq 0 ] && ABIS=(arm64-v8a x86_64)
-STRIP=$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-strip
+STRIP=$NDK_TC/bin/llvm-strip
 [ -f "$DECOMP/apktool.yml" ] || { echo "no decompiled game in $DECOMP: run scripts/decompile.sh <apk>" >&2; exit 1; }
 
 mkdir -p "$OUT_DIR"

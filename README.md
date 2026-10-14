@@ -55,7 +55,7 @@ into the output unchanged. apktool then rebuilds the patched app.
 
 ## Building
 
-Requirements: Linux, JDK 17+, Python 3, `git`, `curl`, `zip`, `unzip`, and the Android SDK with an
+Requirements: Linux (on Windows: WSL2, [see below](#building-on-windows-wsl2)), JDK 17+, Python 3, `git`, `curl`, `zip`, `unzip`, and the Android SDK with an
 NDK (tested with NDK 29), build-tools, platform 34 and CMake ≥ 3.22 with Ninja.
 
 ```sh
@@ -63,7 +63,44 @@ scripts/fetch_deps.sh          # once: dynarmic, Boost headers, apktool (pinned,
 ```
 
 `scripts/env.sh` finds the SDK in `$ANDROID_HOME` (or `~/Android/Sdk`); set `NDK`,
-`BUILD_TOOLS`, `ANDROID_JAR` or `CMAKE_BIN` to override individual tools.
+`NDK_TC`, `BUILD_TOOLS`, `ANDROID_JAR` or `CMAKE_BIN` to override individual tools.
+
+### Building on Windows (WSL2)
+
+The scripts are Linux shell scripts; on Windows 10/11 they run unchanged in WSL2, a Linux
+system built into Windows. Not tested by the author on Windows (the same steps work on Linux).
+
+1. In PowerShell as administrator: `wsl --install`, restart, and finish setting up Ubuntu.
+2. In the Ubuntu terminal, install the tools and the Linux Android SDK:
+
+   ```sh
+   sudo apt update && sudo apt install -y openjdk-17-jdk python3 git curl zip unzip
+   mkdir -p ~/Android/Sdk/cmdline-tools && cd ~/Android/Sdk/cmdline-tools
+   curl -LO https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip
+   unzip -q commandlinetools-linux-*.zip && mv cmdline-tools latest && rm commandlinetools-linux-*.zip
+   yes | latest/bin/sdkmanager --licenses >/dev/null
+   latest/bin/sdkmanager "ndk;29.0.14206865" "build-tools;36.0.0" "platforms;android-34" "cmake;4.1.2"
+   ```
+
+3. Get the source and your APK into the Linux home folder (building under `/mnt/c` works but
+   is much slower):
+
+   ```sh
+   cd ~ && git clone https://github.com/27hectormanuel/cq64.git && cd cq64
+   cp /mnt/c/Users/<your Windows user>/Downloads/CostumeQuest.apk ~/
+   scripts/build_cq.sh ~/CostumeQuest.apk optimized --abi arm64-v8a     # or: original
+   ```
+
+4. Install it on the phone. Either open the output folder in Explorer with `explorer.exe out`,
+   copy the APK to the phone and open it there, or use Windows' `adb.exe` (Android
+   platform-tools for Windows) from the same terminal:
+
+   ```sh
+   adb.exe install -r --no-incremental "$(wslpath -w out/costumequest64.apk)"
+   ```
+
+   The full APK is the simplest on Windows: `install_split.sh` and `dev_push.sh` call a Linux
+   `adb`, which can't see USB devices in WSL2 without extra setup (`usbipd`).
 
 ### Costume Quest
 
