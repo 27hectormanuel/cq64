@@ -19,7 +19,8 @@
 // Worker threads: the engine spreads simulation tasks (animation, particles, visibility) and
 // scene graph work over thread pools. Costume Quest 2 on PC gives them 2 worker threads each;
 // this Android build creates the simulation pool with none and the scene graph's with one, so
-// nearly everything runs on the game thread (one core). With files/workers, both get 2.
+// nearly everything runs on the game thread (one core). With files/workers, the simulation pool
+// gets 4 (phones have more cores than 2014 PCs did) and the scene graph's 2.
 #include "simrate.h"
 
 #include "abi.h"
@@ -64,7 +65,7 @@ u32 movt(u32 insn, u16 imm) { return (insn & 0xfff0f000) | ((imm >> 12) << 16) |
 bool patch_movt(u32 fn, u16 from, u16 to) {
     for (u32 a = fn; a < fn + 0x200; a += 4) {
         u32 x = rd<u32>(a);
-        if ((x & 0x0ff00000) == 0x03400000 && ((x >> 4) & 0xf000 | (x & 0xfff)) == from) {
+        if ((x & 0x0ff00000) == 0x03400000 && (((x >> 4) & 0xf000) | (x & 0xfff)) == from) {
             wr<u32>(a, movt(x, to));
             return true;
         }
@@ -83,9 +84,9 @@ void enable_workers(Module *cq) {
     u32 sim = loader::lookup_in(cq, "_ZN8SimWorld27_InitializeDefaultThreadingEb") & ~1u;
     u32 scene = loader::lookup_in(cq, "_ZN10SceneGraphC2Ev") & ~1u;
     // Both branches of SimWorld::_InitializeDefaultThreading pass 0 threads; SceneGraph's pool 1.
-    bool ok = sim && scene && patch_mov_r1(sim, 0x64, 0, 2) && patch_mov_r1(sim, 0x84, 0, 2) &&
+    bool ok = sim && scene && patch_mov_r1(sim, 0x64, 0, 4) && patch_mov_r1(sim, 0x84, 0, 4) &&
               patch_mov_r1(scene, 0x768, 1, 2);
-    LOGI(ok ? "simrate: 2 worker threads for simulation and scene graph tasks"
+    LOGI(ok ? "simrate: worker threads: 4 for simulation tasks, 2 for the scene graph"
             : "simrate: thread pool setup not as expected; workers unchanged");
 }
 }  // namespace

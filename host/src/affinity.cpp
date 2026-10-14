@@ -12,12 +12,19 @@
 // the game's threads hand frames to each other, so each looks half idle and the clocks stay low
 // (the fast core ran at 1.3 of 2.9 GHz). Android's Performance Hint API (ADPF, Android 12+) is
 // meant for this: the game's threads join a hint session with a 60 fps frame-time target, each
-// presented frame reports how long it really took, and Android raises the clocks to meet it.
+// presented frame reports how long it really took, and Android raises the clocks to meet it;
+// late frames also send a "CPU load up" hint, and the session does not prefer power efficiency.
+// The kernel's per-thread utilization clamp (uclamp_min) is also asked for the game and render
+// threads, so the governor treats them as busy even while they wait on each other (if the
+// kernel allows an app to raise it; logged).
+// Other game threads (workers, streaming) may use every core but the fastest, so the game
+// thread keeps that one to itself.
 #include "affinity.h"
 
 #include "common.h"
 
 #include <dirent.h>
+#include <sys/syscall.h>
 #include <dlfcn.h>
 #include <pthread.h>
 #include <sched.h>
@@ -25,6 +32,7 @@
 #include <unistd.h>
 
 #include <algorithm>
+#include <cerrno>
 #include <cstdio>
 #include <cstring>
 #include <map>
@@ -41,8 +49,11 @@ struct Adpf {
     void *(*create)(void *, const int32_t *, size_t, int64_t);
     int (*report)(void *, int64_t);
     int (*set_threads)(void *, const int32_t *, size_t);  // API 34, may be null
+    int (*send_hint)(void *, int32_t);                     // API 34, may be null
+    int (*prefer_efficiency)(void *, bool);                // API 35, may be null
     void (*close)(void *);
 } g_adpf;
+constexpr int32_t HINT_CPU_LOAD_UP = 0;
 std::mutex g_session_lock;
 void *g_session;
 constexpr int64_t TARGET_NS = 1000000000LL / 60;
@@ -55,6 +66,8 @@ bool load_adpf() {
     g_adpf.report = (int (*)(void *, int64_t))dlsym(lib, "APerformanceHint_reportActualWorkDuration");
     g_adpf.set_threads = (int (*)(void *, const int32_t *, size_t))dlsym(lib, "APerformanceHint_setThreads");
     g_adpf.close = (void (*)(void *))dlsym(lib, "APerformanceHint_closeSession");
+    g_adpf.send_hint = (int (*)(void *, int32_t))dlsym(lib, "APerformanceHint_sendHint");
+    g_adpf.prefer_efficiency = (int (*)(void *, bool))dlsym(lib, "APerformanceHint_setPreferPowerEfficiency");
     return g_adpf.get_manager && g_adpf.create && g_adpf.report && g_adpf.close;
 }
 
@@ -65,11 +78,12 @@ void hint_threads(const std::vector<int32_t> &tids) {
     if (g_session) g_adpf.close(g_session), g_session = nullptr;
     void *manager = g_adpf.get_manager();
     if (manager) g_session = g_adpf.create(manager, tids.data(), tids.size(), TARGET_NS);
+    if (g_session && g_adpf.prefer_efficiency) g_adpf.prefer_efficiency(g_session, false);
     LOGI("affinity: performance hint session %s for %zu threads", g_session ? "created" : "unavailable", tids.size());
 }
 
-// CPU masks by tier: the fastest cores, then the rest except the slowest tier.
-bool core_tiers(cpu_set_t &fast, cpu_set_t &mid) {
+// CPU masks: the fastest cores, and all the others.
+bool core_tiers(cpu_set_t &fast, cpu_set_t &others) {
     std::map<long, std::vector<int>, std::greater<long>> by_freq;
     for (int c = 0; c < CPU_SETSIZE; c++) {
         char path[96];
@@ -82,17 +96,26 @@ bool core_tiers(cpu_set_t &fast, cpu_set_t &mid) {
     }
     if (by_freq.size() < 2) return false;  // all cores alike: nothing to do
     CPU_ZERO(&fast);
-    CPU_ZERO(&mid);
-    auto tier = by_freq.begin();
-    for (int c : tier->second) CPU_SET(c, &fast);
-    // The middle tiers; with only two tiers, the fast cores themselves.
-    if (by_freq.size() == 2) {
-        for (int c : tier->second) CPU_SET(c, &mid);
-    } else {
-        for (auto t = std::next(tier); t != std::prev(by_freq.end()); ++t)
-            for (int c : t->second) CPU_SET(c, &mid);
-    }
+    CPU_ZERO(&others);
+    for (auto t = by_freq.begin(); t != by_freq.end(); ++t)
+        for (int c : t->second) CPU_SET(c, t == by_freq.begin() ? &fast : &others);
     return true;
+}
+
+// uclamp_min for a thread (0..1024); false if the kernel refuses.
+bool set_uclamp_min(pid_t tid, unsigned value) {
+    struct {
+        uint32_t size, policy;
+        uint64_t flags;
+        int32_t nice;
+        uint32_t priority;
+        uint64_t runtime, deadline, period;
+        uint32_t util_min, util_max;
+    } attr{};
+    attr.size = sizeof attr;
+    attr.flags = 0x08 | 0x10 | 0x20;  // SCHED_FLAG_KEEP_POLICY | KEEP_PARAMS | UTIL_CLAMP_MIN
+    attr.util_min = value;
+    return syscall(SYS_sched_setattr, tid, &attr, 0) == 0;
 }
 
 long thread_cpu_ticks(const char *tid, std::string &name) {
@@ -115,8 +138,9 @@ long thread_cpu_ticks(const char *tid, std::string &name) {
 void monitor() {
     pthread_setname_np(pthread_self(), "cq-affinity");
     if (!load_adpf()) g_adpf = {};
-    cpu_set_t fast, mid;
-    if (!core_tiers(fast, mid)) return;
+    cpu_set_t fast, others;
+    if (!core_tiers(fast, others)) return;
+    static bool uclamp_logged;
     std::map<pid_t, long> last;
     pid_t pinned = 0;
     for (;;) {
@@ -138,8 +162,21 @@ void monitor() {
         last.swap(now);
         if (busy.empty()) continue;
         std::sort(busy.rbegin(), busy.rend());
-        pid_t top = busy[0].first > 0 ? busy[0].second : pinned;
-        for (const auto &[ticks, tid] : busy) sched_setaffinity(tid, sizeof(cpu_set_t), tid == top ? &fast : &mid);
+        // The pin moves only to a clearly busier thread: the game and render threads are close,
+        // and swapping the fast core between them every two seconds helps neither.
+        pid_t top = busy[0].second;
+        for (const auto &[ticks, tid] : busy)
+            if (tid == pinned && busy[0].first < ticks + ticks / 4) top = pinned;
+        if (busy[0].first <= 0) top = pinned;
+        for (const auto &[ticks, tid] : busy) sched_setaffinity(tid, sizeof(cpu_set_t), tid == top ? &fast : &others);
+        // The two busiest (game and render thread) count as fully busy for the governor.
+        for (size_t i = 0; i < busy.size(); i++) {
+            bool ok = set_uclamp_min(busy[i].second, i < 2 ? 1024 : 0);
+            if (!uclamp_logged) {
+                LOGI("affinity: utilization clamp %s", ok ? "set" : strerror(errno));
+                uclamp_logged = true;
+            }
+        }
         if (top != pinned) LOGI("affinity: game thread %d on the fastest cores", top);
         pinned = top;
         // The hint session: the game's threads that did real work in the last two seconds.
@@ -162,7 +199,14 @@ void frame_presented() {
     last = now;
     if (dt <= 0 || dt > 500000000LL) return;  // first frame, or after a pause
     std::lock_guard<std::mutex> lk(g_session_lock);
-    if (g_session) g_adpf.report(g_session, dt);
+    if (!g_session) return;
+    g_adpf.report(g_session, dt);
+    // A late frame: ask for more right away (at most every 100 ms).
+    static int64_t last_hint = 0;
+    if (g_adpf.send_hint && dt > TARGET_NS + TARGET_NS / 20 && now - last_hint > 100000000LL) {
+        g_adpf.send_hint(g_session, HINT_CPU_LOAD_UP);
+        last_hint = now;
+    }
 }
 
 void start(const std::string &flag_file) {
