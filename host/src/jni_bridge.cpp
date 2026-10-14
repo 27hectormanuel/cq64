@@ -39,6 +39,7 @@ std::unordered_map<jfieldID, u32> g_field_ids;
 struct Mirror {
     void *host;
     u32 guest, size;
+    jobject buffer;  // global reference: keeps the buffer, and so `host`, from being collected
 };
 std::mutex g_mirror_lock;
 std::unordered_map<void *, Mirror> g_mirrors;
@@ -632,7 +633,9 @@ void j_GetDirectBufferAddress(GuestThread &t) {
         u32 size = (u32)e->GetDirectBufferCapacity(buf);
         u32 g = mem::map(size ? size : 1);
         memcpy(g2h(g), p, size);
-        it = g_mirrors.emplace(p, Mirror{p, g, size}).first;
+        // Without the reference, a collected buffer's memory would be reused by other Java
+        // objects while the mirror kept being copied back into it (heap corruption).
+        it = g_mirrors.emplace(p, Mirror{p, g, size, e->NewGlobalRef(buf)}).first;
         LOGI("mirroring direct buffer %p (%u bytes) at guest 0x%08x", p, size, g);
     }
     t.ret32(it->second.guest);
