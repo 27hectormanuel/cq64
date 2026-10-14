@@ -50,6 +50,7 @@ struct Located {
     const std::vector<u8> *bytes;
 };
 std::vector<Located> g_located;
+std::string g_pack;  // pack path given to init()
 std::deque<std::vector<u8>> g_generated;  // contents of generated files (stable addresses)
 bool g_icons;
 dev_t g_dev;
@@ -311,6 +312,7 @@ void build_icons(int fd, s64 base, s64 size) {
 }  // namespace
 
 void init(const std::string &pack_path) {
+    g_pack = pack_path;
     int fd = open(pack_path.c_str(), O_RDONLY | O_CLOEXEC);
     struct stat st;
     if (fd < 0 || fstat(fd, &st) != 0) {
@@ -355,4 +357,47 @@ void apply(int fd, s64 pos, void *buf, s64 n) {
 
 namespace datapatch {
 bool icon_library_ready() { return g_icons; }
+
+std::vector<std::pair<std::string, std::string>> lua_scripts() {
+    std::vector<std::pair<std::string, std::string>> out;
+    int fd = g_pack.empty() ? -1 : open(g_pack.c_str(), O_RDONLY | O_CLOEXEC);
+    struct stat st;
+    if (fd < 0 || fstat(fd, &st) != 0) {
+        if (fd >= 0) close(fd);
+        return out;
+    }
+    s64 base = 0, size = 0;
+    base = find_stored(fd, 0, st.st_size, "assets/ant.mp3", &size);
+    // The pack's central directory: every stored *.lua member.
+    u8 tail[65557];
+    s64 tlen = size < (s64)sizeof tail ? size : (s64)sizeof tail;
+    s64 eocd = -1;
+    if (base >= 0 && pread_all(fd, tail, tlen, base + size - tlen))
+        for (s64 i = tlen - 22; i >= 0; i--)
+            if (le32(tail + i) == 0x06054b50) { eocd = i; break; }
+    if (eocd >= 0) {
+        u32 count = le16(tail + eocd + 10), cd_size = le32(tail + eocd + 12), cd_off = le32(tail + eocd + 16);
+        std::vector<u8> cd(cd_size);
+        if (pread_all(fd, cd.data(), cd_size, base + cd_off)) {
+            for (u32 i = 0, p = 0; i < count && p + 46 <= cd_size; i++) {
+                const u8 *e = cd.data() + p;
+                if (le32(e) != 0x02014b50) break;
+                u16 n = le16(e + 28), x = le16(e + 30), c = le16(e + 32);
+                std::string name((const char *)e + 46, n);
+                u32 len = le32(e + 24);
+                u8 lh[30];
+                s64 lho = base + le32(e + 42);
+                if (n > 4 && name.compare(n - 4, 4, ".lua") == 0 && le16(e + 10) == 0 && len < (1u << 20) &&
+                    pread_all(fd, lh, 30, lho) && le32(lh) == 0x04034b50) {
+                    std::string src(len, '\0');
+                    if (pread_all(fd, &src[0], len, lho + 30 + le16(lh + 26) + le16(lh + 28)))
+                        out.emplace_back(name, std::move(src));
+                }
+                p += 46 + n + x + c;
+            }
+        }
+    }
+    close(fd);
+    return out;
+}
 }  // namespace datapatch

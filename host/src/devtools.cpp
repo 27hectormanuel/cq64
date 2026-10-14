@@ -17,6 +17,7 @@
 
 #include "abi.h"
 #include "game.h"
+#include "luahints.h"
 
 #include <atomic>
 #include <cstdio>
@@ -167,6 +168,8 @@ jstring j_command_list(JNIEnv *env, jclass) {
     std::lock_guard<std::mutex> lk(g_out_lock);
     return env->NewStringUTF(g_list.c_str());
 }
+// Built on first call (scans the game's code and scripts): call it off the UI thread.
+jstring j_command_hints(JNIEnv *env, jclass) { return env->NewStringUTF(luahints::get().c_str()); }
 jfloat j_fps(JNIEnv *, jclass) { return g_fps; }
 void j_set_frame_cap(JNIEnv *, jclass, jint fps) {
     LOGI("frame cap -> %d", fps);
@@ -229,8 +232,9 @@ void register_natives(JNIEnv *env) {
         {"nativeFps", "()F", (void *)&j_fps},
         {"nativeSetFrameCap", "(I)V", (void *)&j_set_frame_cap},
         {"nativeCommandList", "()Ljava/lang/String;", (void *)&j_command_list},
+        {"nativeCommandHints", "()Ljava/lang/String;", (void *)&j_command_hints},
     };
-    if (env->RegisterNatives(c, m, 5) != JNI_OK) fatal("RegisterNatives DevTools failed");
+    if (env->RegisterNatives(c, m, 6) != JNI_OK) fatal("RegisterNatives DevTools failed");
     env->DeleteLocalRef(c);
 }
 }  // namespace devtools

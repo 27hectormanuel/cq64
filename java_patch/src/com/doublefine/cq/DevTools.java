@@ -55,6 +55,7 @@ public final class DevTools {
     static native float nativeFps();
     static native void nativeSetFrameCap(int fps);
     static native String nativeCommandList();  // functions the game's Lua exposes (LIST_LUA)
+    static native String nativeCommandHints();  // what they take (luahints.cpp); slow first call
     static native void nativePad(int buttons, int lx, int ly, int rx, int ry, int lt, int rt);
     static native void nativePadIcons(int set);  // button icons: 0 Xbox, 1 PlayStation
 
@@ -89,6 +90,78 @@ public final class DevTools {
             + "end end "
             + "table.sort(o) hostlist(table.concat(o, '\\n'))";
     private static String[] sLuaCommands;  // from LIST_LUA, once per run
+    private static java.util.Map<String, Call> sCalls;  // argument hints by "table.name", once per run
+
+    /** How to call a command: the list's signature and, if it takes arguments, a call to edit. */
+    private static final class Call {
+        final String signature, template;  // template null: run as "name()"
+        Call(String signature, String template) { this.signature = signature; this.template = template; }
+    }
+
+    /**
+     * Turns nativeCommandHints() (luahints.cpp) into a Call for each listed command. Preference:
+     * a literal call from the game's scripts, the script's parameter list, then the engine
+     * function's argument types (a boolean setter with a matching getter becomes a toggle).
+     */
+    private static java.util.Map<String, Call> parseHints(String hints, String[] names) {
+        java.util.Map<String, String[]> engine = new java.util.HashMap<>();  // short name -> lo, hi, types
+        java.util.Map<String, String> params = new java.util.HashMap<>();
+        java.util.Map<String, String> example = new java.util.HashMap<>();
+        for (String line : hints.split("\n")) {
+            String[] f = line.split("\t", -1);
+            if (f[0].equals("C") && f.length >= 5) engine.putIfAbsent(f[1], new String[] {f[2], f[3], f[4]});
+            else if (f[0].equals("S") && f.length >= 3) params.put(f[1], f[2]);
+            else if (f[0].equals("E") && f.length >= 3) example.putIfAbsent(f[1], f[2]);
+        }
+        java.util.Set<String> all = new java.util.HashSet<>(java.util.Arrays.asList(names));
+        java.util.Map<String, Call> out = new java.util.HashMap<>();
+        for (String full : names) {
+            String table = full.substring(0, full.indexOf('.')), name = full.substring(full.indexOf('.') + 1);
+            String ex = example.get(full), p = params.get(full);
+            String[] e = engine.get(name);
+            if (ex != null) {
+                out.put(full, new Call(p != null && !p.isEmpty() ? p : ex, full + "(" + ex + ")"));
+            } else if (p != null) {
+                out.put(full, new Call(p, p.isEmpty() ? null : full + "(" + p + ")"));
+            } else if (e != null) {
+                int lo = Integer.parseInt(e[0]), hi = Integer.parseInt(e[1]);
+                String[] types = e[2].isEmpty() ? new String[0] : e[2].split(",");
+                int n = Math.max(lo, types.length);
+                if (hi == 0 || n == 0) {
+                    out.put(full, new Call("", null));
+                    continue;
+                }
+                StringBuilder sig = new StringBuilder(), args = new StringBuilder();
+                for (int i = 0; i < n; i++) {
+                    String t = i < types.length ? types[i] : "any";
+                    if (i > 0) { sig.append(", "); args.append(", "); }
+                    sig.append(t);
+                    if (lo >= 0 && i >= lo) sig.append('?');
+                    args.append(placeholder(t, table, name, i, all));
+                }
+                out.put(full, new Call(sig.toString(), full + "(" + args + ")"));
+            }
+        }
+        return out;
+    }
+
+    /** An argument to start from: for "SetX(bool)", the opposite of the matching getter. */
+    private static String placeholder(String type, String table, String name, int index,
+                                      java.util.Set<String> all) {
+        switch (type) {
+            case "bool":
+                if (index == 0 && name.startsWith("Set")) {
+                    String x = name.substring(3);
+                    for (String g : new String[] {"Get" + x, "Is" + x, "Is" + x + "Enabled", "Get" + x + "Enabled"})
+                        if (all.contains(table + "." + g)) return "not " + table + "." + g + "()";
+                }
+                return "true";
+            case "number": return "1";
+            case "string": case "enum": case "mission": case "domain": return "''";
+            case "resource": return "RESOURCE('')";
+            default: return "nil";
+        }
+    }
 
     private static Activity sActivity;
     private static SharedPreferences sPrefs;
@@ -687,6 +760,7 @@ public final class DevTools {
         // entries containing the filter text.
         final Runnable fill = () -> {
             String f = input.getText().toString().trim().toLowerCase(java.util.Locale.ROOT);
+            if (f.indexOf('(') >= 0) f = "";  // a call being written, not a filter
             shown.clear();
             shown.add(new Entry("Handy", null));
             for (String[] c : COMMANDS)
@@ -698,7 +772,9 @@ public final class DevTools {
                     if (!f.isEmpty() && !name.toLowerCase(java.util.Locale.ROOT).contains(f)) continue;
                     String t = name.substring(0, name.indexOf('.'));
                     if (!t.equals(table)) shown.add(new Entry(table = t, null));
-                    shown.add(new Entry(name + "()", name + "()"));
+                    Call call = sCalls == null ? null : sCalls.get(name);
+                    shown.add(new Entry(name + "(" + (call == null ? "" : call.signature) + ")",
+                            call != null && call.template != null ? call.template : name + "()"));
                 }
             }
             // Drop headers left without commands.
@@ -720,6 +796,14 @@ public final class DevTools {
                     if (!l.isEmpty()) {
                         sLuaCommands = l.split("\n");
                         fill.run();
+                        final String[] names = sLuaCommands;
+                        new Thread(() -> {  // scans the game's code and scripts: off the UI thread
+                            java.util.Map<String, Call> calls = parseHints(nativeCommandHints(), names);
+                            sHandler.post(() -> {
+                                sCalls = calls;
+                                fill.run();
+                            });
+                        }, "cq-lua-hints").start();
                     } else if (++tries < 50) {
                         sHandler.postDelayed(this, 200);
                     }
@@ -728,11 +812,26 @@ public final class DevTools {
         }
         fill.run();
 
+        // Commands that take arguments are not run as is: their call goes into the text box to
+        // edit, with Run focused (A runs it with a controller).
+        final java.util.function.Consumer<String> editCommand = cmd -> {
+            input.setText(cmd);
+            input.setSelection(cmd.indexOf('(') + 1, cmd.length() - 1);
+            if (inputRow.getVisibility() != View.VISIBLE) inputRow.setVisibility(View.VISIBLE);
+            if (list.isInTouchMode()) {
+                input.requestFocus();
+                input.post(() -> sActivity.getSystemService(android.view.inputmethod.InputMethodManager.class)
+                        .showSoftInput(input, 0));
+            } else {
+                run.requestFocus();
+            }
+        };
         list.setOnItemClickListener((parent, v, i, id) -> {
             String cmd = shown.get(i).cmd;
             // Touch: a first tap selects, a second runs. Controller / keys: A runs at once.
             if (!list.isInTouchMode() || list.getCheckedItemPosition() == i) {
-                runCommand.accept(cmd);
+                if (cmd.endsWith("()")) runCommand.accept(cmd);
+                else editCommand.accept(cmd);
             }
             list.setItemChecked(i, true);
         });

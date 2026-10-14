@@ -38,6 +38,8 @@ add_library(cqhost SHARED
     src/datapatch.h
     src/devtools.cpp
     src/devtools.h
+    src/luahints.cpp
+    src/luahints.h
     src/game.h
     src/host_main.cpp
     src/jni_bridge.cpp
