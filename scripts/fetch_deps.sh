@@ -23,6 +23,13 @@ if [ ! -d "$TP/dynarmic/.git" ]; then
     git -C "$TP/dynarmic" checkout --quiet "$DYNARMIC_REV"
     git -C "$TP/dynarmic" submodule update --quiet --init --recursive --depth 1
 fi
+# Local changes to dynarmic (patches/dynarmic-*.patch), applied once.
+for patch in "$ROOT"/patches/dynarmic-*.patch; do
+    [ -e "$patch" ] || continue
+    if git -C "$TP/dynarmic" apply --reverse --check "$patch" 2>/dev/null; then continue; fi
+    echo "== dynarmic: $(basename "$patch")"
+    git -C "$TP/dynarmic" apply "$patch"
+done
 
 if [ ! -d "$TP/boost/boost" ]; then
     echo "== Boost headers"
