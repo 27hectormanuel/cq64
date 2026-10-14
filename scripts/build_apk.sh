@@ -9,6 +9,7 @@
 #   a 64-bit-only phone needs (and without the repack's androeed.ru splash, if present).
 #   Output: $OUT_DIR/costumequest64-original.apk
 # (default $OUT_DIR: out/; signed with the debug key)
+# ICON=<image> uses a higher-resolution picture for the launcher icon.
 # FULL=1 includes the 1 GB game data pack. SPLIT=1 instead writes it to $OUT_DIR/cqdata.zip, to be
 # installed with install_split.sh (for phones without room for the full APK).
 set -euo pipefail
@@ -53,6 +54,15 @@ cp "$HERE/java_patch/HostLoader.smali" "$STAGE/smali/com/doublefine/cq/"
 mkdir -p "$STAGE/res/drawable" "$STAGE/res/drawable-anydpi-v26"
 cp "$HERE/java_patch/res/drawable/cq_launcher.xml" "$STAGE/res/drawable/"
 cp "$HERE/java_patch/res/drawable-anydpi-v26/cq_launcher.xml" "$STAGE/res/drawable-anydpi-v26/"
+# ICON=<png/jpg/webp>: a higher-resolution square picture for the adaptive icon (e.g. the game's
+# 1024 px store icon) instead of the APK's 144 px one.
+if [ -n "${ICON:-}" ]; then
+    ext=$(echo "${ICON##*.}" | tr 'A-Z' 'a-z'); [ "$ext" = jpeg ] && ext=jpg
+    case "$ext" in png | jpg | webp) ;; *) echo "ICON must be a .png, .jpg or .webp file" >&2; exit 1 ;; esac
+    mkdir -p "$STAGE/res/drawable-nodpi"
+    cp "$ICON" "$STAGE/res/drawable-nodpi/cq_icon_art.$ext"
+    sed -i 's|@drawable/ic_launcher|@drawable/cq_icon_art|' "$STAGE/res/drawable-anydpi-v26/cq_launcher.xml"
+fi
 if [ "$VARIANT" = optimized ]; then
     mkdir -p "$STAGE/res/xml"
     cp "$HERE/java_patch/res/xml/game_mode_config.xml" "$STAGE/res/xml/"

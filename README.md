@@ -120,7 +120,14 @@ adb install -r --no-incremental out/costumequest64-original.apk
 ```
 
 Options: `--split` (small APK + `out/cqdata.zip`, see below), `--abi arm64-v8a` or
-`--abi x86_64` to build for one ABI only.
+`--abi x86_64` to build for one ABI only, `--icon <picture>` (see below).
+
+**Launcher icon:** both variants get an adaptive icon, so modern launchers (e.g. Pixel on
+Android 17) show it in their own shape instead of shrinking the old square icon into a white
+circle. It is made from the 144 px icon in your APK; for a sharper one, pass a higher-resolution
+square picture of the same icon (e.g. the game's 1024 px store icon, `.png`/`.jpg`/`.webp`) with
+`--icon` (or `ICON=` for `build_apk.sh`). The picture is not included here for the same reason
+the game isn't.
 
 Step by step:
 

@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: CC0-1.0
 # One-step Costume Quest builder: fetches the dependencies if needed, decompiles your APK and
 # builds the 64-bit APK in the variant you choose.
-#   scripts/build_cq.sh <your CostumeQuest.apk> [original|optimized] [--split] [--abi ABI]...
+#   scripts/build_cq.sh <your CostumeQuest.apk> [original|optimized] [--split] [--abi ABI]... [--icon FILE]
 #
 #   original   the game exactly as the 32-bit APK plays it (touch only, no developer menu), with
 #              only the changes needed to run it on 64-bit-only phones
@@ -12,6 +12,7 @@
 #   --split    small APK + separate data pack (out/cqdata.zip), installed with
 #              scripts/install_split.sh, for phones without room for the ~1.1 GB APK
 #   --abi      arm64-v8a (phones) and/or x86_64 (the Android emulator); default: both
+#   --icon     a higher-resolution square picture (.png/.jpg/.webp) for the launcher icon
 # Without a variant, asks which one to build.
 set -euo pipefail
 HERE=$(cd "$(dirname "$0")" && pwd)
@@ -23,6 +24,7 @@ while [ $# -gt 0 ]; do
     original | optimized) VARIANT=$1 ;;
     --split) SPLIT=1 ;;
     --abi) ABIS+=("${2:?--abi needs a value}"); shift ;;
+    --icon) export ICON=${2:?--icon needs a file}; [ -f "$ICON" ] || { echo "no such file: $ICON" >&2; exit 1; }; shift ;;
     -h | --help) sed -n '3,16p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     -*) echo "unknown option $1" >&2; exit 1 ;;
     *) APK=$1 ;;
