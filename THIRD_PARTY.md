@@ -8,6 +8,14 @@
 | [dlmalloc](https://gee.cs.oswego.edu/dl/html/malloc.html) 2.8.6 | `third_party/misc/malloc.c` | CC0 / public domain | heap allocator for the guest runtime and the host's guest-memory allocator |
 | [stb_sprintf](https://github.com/nothings/stb) 1.10 | `third_party/misc/stb_sprintf.h` | MIT or public domain | printf family for the guest runtime |
 
+The Windows build (docs/windows.md) also uses, fetched by `scripts/fetch_win_deps.sh` into
+`third_party/win` with pinned SHA-256 checksums: [llvm-mingw](https://github.com/mstorsjo/llvm-mingw)
+(Apache-2.0 with LLVM exceptions; MinGW-w64 runtime, whose `libwinpthread-1.dll` ships with the
+build), SDL2 and zlib (zlib license, MSYS2 packages), and ANGLE (BSD-3-Clause; `libEGL.dll`,
+`libGLESv2.dll` and `d3dcompiler_47.dll` from Electron's Windows release, whose
+`LICENSES.chromium.html` ships with the build). jni.h and the Khronos EGL/GLES headers come from
+the Android NDK.
+
 `scripts/fetch_deps.sh` pins the exact dynarmic commit and checks the SHA-256 of the Boost and
 Apktool downloads. It then applies this project's dynarmic changes from `patches/` (0BSD, like
 dynarmic): `dynarmic-arm64-fast-dispatch.patch` adds the fast dispatch lookup table to the arm64

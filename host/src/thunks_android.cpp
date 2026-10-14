@@ -4,6 +4,9 @@
 #include "devtools.h"
 #include "game.h"
 #include "jni_bridge.h"
+#ifdef _WIN32
+#include "win/fakejvm.h"
+#endif
 
 #include <android/native_window_jni.h>
 #include <EGL/egl.h>
@@ -138,6 +141,9 @@ u32 t_eglSwapBuffers(u32 d, u32 s) {
         last = now;
     }
     devtools::frame_presented();
+#ifdef _WIN32
+    win::before_swap();
+#endif
     return eglSwapBuffers(g_dpys.to_host(d), g_surfs.to_host(s));
 }
 THUNK(eglSwapBuffers, t_eglSwapBuffers);

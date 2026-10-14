@@ -25,6 +25,13 @@ void crash_note(const char *line);
 
 [[noreturn]] void fatal(const char *fmt, ...) __attribute__((format(printf, 1, 2)));
 
+// Host error number -> the guest's (Linux) numbering. They differ only on Windows (ETIMEDOUT...).
+#ifdef _WIN32
+inline int guest_err(int e) { return cq_errno_to_linux(e); }
+#else
+inline int guest_err(int e) { return e; }
+#endif
+
 // ---- guest address space ----
 // The whole 32-bit guest address space is one 4 GiB host mapping starting at g_base,
 // so guest address A is host address g_base + A.

@@ -21,9 +21,16 @@
 
 namespace libc_host { void init(); }
 
+#ifdef _WIN32
+#include "win/fakejvm.h"
+namespace game {
+std::string files_dir() { return win::files_dir(); }  // next to cq64.exe
+}  // namespace game
+#else
 namespace game {
 std::string files_dir() { return std::string("/data/data/") + kPackage + "/files"; }
 }  // namespace game
+#endif
 
 namespace host {
 void mkdirs(const std::string &path) {
@@ -32,6 +39,9 @@ void mkdirs(const std::string &path) {
 }
 
 std::string own_apk() {
+#ifdef _WIN32
+    return win::apk_path();
+#endif
     FILE *f = fopen("/proc/self/maps", "r");
     if (!f) return {};
     const std::string marker = std::string("/") + game::kPackage + "-";

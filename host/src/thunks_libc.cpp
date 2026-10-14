@@ -349,6 +349,14 @@ void put_stat(u32 g, const struct stat &s) {
     wr<u32>(g + 28, s.st_gid);
     wr<u64>(g + 32, s.st_rdev);
     wr<s64>(g + 48, s.st_size);
+#ifdef _WIN32
+    // Windows: whole-second times and no block fields.
+    wr<u32>(g + 56, 4096);
+    wr<u64>(g + 64, ((u64)s.st_size + 511) / 512);
+    wr<u32>(g + 72, (u32)s.st_atime);
+    wr<u32>(g + 80, (u32)s.st_mtime);
+    wr<u32>(g + 88, (u32)s.st_ctime);
+#else
     wr<u32>(g + 56, (u32)s.st_blksize);
     wr<u64>(g + 64, (u64)s.st_blocks);
     wr<u32>(g + 72, (u32)s.st_atim.tv_sec);
@@ -357,6 +365,7 @@ void put_stat(u32 g, const struct stat &s) {
     wr<u32>(g + 84, (u32)s.st_mtim.tv_nsec);
     wr<u32>(g + 88, (u32)s.st_ctim.tv_sec);
     wr<u32>(g + 92, (u32)s.st_ctim.tv_nsec);
+#endif
     wr<u64>(g + 96, s.st_ino);
 }
 int t_stat(G<const char> path, u32 out) {
@@ -522,7 +531,9 @@ THUNK(difftime, t_difftime);
 void put_tm(u32 g, const struct tm &t) {
     s32 v[9] = {t.tm_sec, t.tm_min, t.tm_hour, t.tm_mday, t.tm_mon, t.tm_year, t.tm_wday, t.tm_yday, t.tm_isdst};
     memcpy(g2h(g), v, sizeof v);
+#ifndef _WIN32  // Windows' struct tm has no tm_gmtoff
     wr<s32>(g + 36, (s32)t.tm_gmtoff);
+#endif
     static u32 zone_utc = mem::hstrdup("UTC");
     wr<u32>(g + 40, zone_utc);
 }
@@ -532,7 +543,9 @@ struct tm get_tm(u32 g) {
     memcpy(v, g2h(g), sizeof v);
     t.tm_sec = v[0]; t.tm_min = v[1]; t.tm_hour = v[2]; t.tm_mday = v[3]; t.tm_mon = v[4];
     t.tm_year = v[5]; t.tm_wday = v[6]; t.tm_yday = v[7]; t.tm_isdst = v[8];
+#ifndef _WIN32
     t.tm_gmtoff = rd<s32>(g + 36);
+#endif
     return t;
 }
 u32 thread_tm() {

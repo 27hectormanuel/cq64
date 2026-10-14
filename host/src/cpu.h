@@ -33,7 +33,7 @@ struct GuestThread {
     u32 &r(int i);
     u32 sp();
     u32 cpsr();
-    void set_errno(int e) { wr<s32>(errno_addr, e); }
+    void set_errno(int e) { wr<s32>(errno_addr, guest_err(e)); }
 
     // AAPCS argument access (softfp: all args in r0-r3 then stack).
     u32 arg(int i) { return i < 4 ? r(i) : rd<u32>(sp() + 4 * (i - 4)); }

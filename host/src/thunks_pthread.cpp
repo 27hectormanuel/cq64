@@ -103,7 +103,7 @@ int t_mutex_lock(u32 m) { return pthread_mutex_lock(get_mutex(m)); }
 THUNK(pthread_mutex_lock, t_mutex_lock);
 int t_mutex_unlock(u32 m) { return pthread_mutex_unlock(get_mutex(m)); }
 THUNK(pthread_mutex_unlock, t_mutex_unlock);
-int t_mutex_trylock(u32 m) { return pthread_mutex_trylock(get_mutex(m)); }
+int t_mutex_trylock(u32 m) { return guest_err(pthread_mutex_trylock(get_mutex(m))); }
 THUNK(pthread_mutex_trylock, t_mutex_trylock);
 
 // ---------------------------------------------------------------- condition variables
@@ -147,7 +147,7 @@ int t_cond_wait(u32 c, u32 m) { return pthread_cond_wait(get_cond(c), get_mutex(
 THUNK(pthread_cond_wait, t_cond_wait);
 int t_cond_timedwait(u32 c, u32 m, u32 abstime) {
     struct timespec ts{rd<s32>(abstime), rd<s32>(abstime + 4)};
-    return pthread_cond_timedwait(get_cond(c), get_mutex(m), &ts);
+    return guest_err(pthread_cond_timedwait(get_cond(c), get_mutex(m), &ts));
 }
 THUNK(pthread_cond_timedwait, t_cond_timedwait);
 int t_condattr_noop(u32) { return 0; }
