@@ -558,19 +558,11 @@ public final class DevTools {
     private static void showMenu() {
         if (sActivity == null || sActivity.isFinishing()) return;
         boolean fps = sPrefs.getBoolean("fps", false);
-        int capIndex = capIndex();
-        String capText = CAP_LABELS[capIndex];
-        if (CAP_VALUES[capIndex] < 0) {
-            int c = effectiveCap();
-            capText += " - " + gameModeName(gameMode()) + ": " + (c == 0 ? "uncapped" : c + " fps");
-        }
         String[] items = {
             "FPS counter: " + (fps ? "ON" : "OFF"),
             "Debug command line…",
-            "Frame rate cap: " + capText,
+            "FPS & Performance…",
             "Resolution: " + RES_LABELS[resIndex()],
-            "High frame rate: " + simRateLabel(simRate()),
-            "Performance boost: " + (boostOn() ? "ON" : "OFF"),
         };
         dialog().setTitle("Costume Quest dev tools")
                 .setItems(items, (d, which) -> {
@@ -580,17 +572,40 @@ public final class DevTools {
                     } else if (which == 1) {
                         showConsole();
                     } else if (which == 2) {
-                        showCapPicker();
-                    } else if (which == 3) {
+                        showPerformanceMenu();
+                    } else {
                         showResPicker();
-                    } else if (which == 4) {
+                    }
+                })
+                .setNegativeButton("Close", null)
+                .show();
+    }
+
+    /** FPS & Performance: the frame rate cap, the simulation rate and the performance boost. */
+    private static void showPerformanceMenu() {
+        int capIndex = capIndex();
+        String capText = CAP_LABELS[capIndex];
+        if (CAP_VALUES[capIndex] < 0) {
+            int c = effectiveCap();
+            capText += " - " + gameModeName(gameMode()) + ": " + (c == 0 ? "uncapped" : c + " fps");
+        }
+        String[] items = {
+            "Frame rate cap: " + capText,
+            "High frame rate: " + simRateLabel(simRate()),
+            "Performance boost: " + (boostOn() ? "ON" : "OFF"),
+        };
+        dialog().setTitle("FPS & Performance")
+                .setItems(items, (d, which) -> {
+                    if (which == 0) {
+                        showCapPicker();
+                    } else if (which == 1) {
                         showSimRatePicker();
                     } else {
                         setBoost(!boostOn());
                         showRestartPrompt();
                     }
                 })
-                .setNegativeButton("Close", null)
+                .setNegativeButton("Back", (d, w) -> showMenu())
                 .show();
     }
 

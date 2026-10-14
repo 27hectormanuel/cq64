@@ -170,7 +170,7 @@ the phone's `Android/obb/com.doublefine.mmoj/` folder rather than inside the APK
     lists every function the game's Lua exposes (tap to select, tap again to run; A runs with a
     controller) and filters the list as you type (⌨ button / X). How the debug console works,
     and how to send Lua commands over adb: [docs/debug-console.md](docs/debug-console.md).
-  - **High frame rate** (developer menu, experimental): runs the game world at 60 (or 120)
+  - **High frame rate** (developer menu → FPS & Performance, experimental): runs the game world at 60 (or 120)
     simulation ticks per second instead of 30, as Costume Quest 2's "60 FPS" option does; the
     world otherwise shows 30 distinct frames a second however fast it is drawn. **Performance
     boost** gives the engine's thread pools worker threads (as on PC) and keeps the game's
