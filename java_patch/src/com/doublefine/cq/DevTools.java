@@ -36,7 +36,7 @@ import android.widget.ScrollView;
 import android.widget.TextView;
 
 /**
- * Developer tools for the 64-bit port, opened with a three-finger tap:
+ * Developer tools for the 64-bit port, opened with a three-finger tap or LB + RB + A:
  *  - the game's Lua debug command line (revived by libcqhost; its UI was stripped from retail),
  *  - an FPS counter overlay,
  *  - the render resolution (16:9 by default: the game's UI is cut off at the screen's 20:9),
@@ -54,6 +54,7 @@ public final class DevTools {
     static native String nativeOutput();
     static native float nativeFps();
     static native void nativeSetFrameCap(int fps);
+    static native String nativeCommandList();  // functions the game's Lua exposes (LIST_LUA)
     static native void nativePad(int buttons, int lx, int ly, int rx, int ry, int lt, int rt);
     static native void nativePadIcons(int set);  // button icons: 0 Xbox, 1 PlayStation
 
@@ -64,10 +65,30 @@ public final class DevTools {
         "16:9, full height (sharp)", "16:9, 1080p", "16:9, 720p (original)", "Full screen (UI is cut off)",
     };
     private static final int[] RES_VALUES = {RES_SHARP, 1080, 720, RES_FULL};
-    private static final String[] EXAMPLES = {
-        "debug.AcquireAllCostumes()", "debug.GetAllStamps()", "debug.GetAllTricks()",
-        "debug.ToggleSkipCutscenes()", "cq.WinBattle()", "app.GetCodeBuildVersion()",
+    // Commands at the top of the console's list (label, Lua).
+    private static final String[][] COMMANDS = {
+        {"Win battle", "cq.WinBattle()"},
+        {"Start a battle", "cq.StartBattle()"},
+        {"Get all costumes", "debug.AcquireAllCostumes()"},
+        {"Get all battle stamps", "debug.GetAllStamps()"},
+        {"Get all tricks", "debug.GetAllTricks()"},
+        {"Toggle skip cutscenes", "debug.ToggleSkipCutscenes()"},
+        {"Complete trick-or-treating", "debug.CompleteTrickOrTreating()"},
+        {"Kill monster encounters", "debug.KillMonsterEncounters()"},
+        {"Teleport to open world", "debug.TeleportToOpenWorld()"},
+        {"Game build version", "app.GetCodeBuildVersion()"},
     };
+    // Lua the console runs once to list every function the game's Lua tables expose (standard
+    // libraries left out), one "table.name" per line, via hostlist() (devtools.cpp).
+    private static final String LIST_LUA = "\u0001"
+            + "local skip = {string=1, table=1, math=1, io=1, os=1, coroutine=1, package=1, _G=1, bit=1, jit=1} "
+            + "local o = {} "
+            + "for n, m in pairs(_G) do if type(n) == 'string' and type(m) == 'table' and not skip[n] then "
+            + "pcall(function() for k, v in pairs(m) do "
+            + "if type(k) == 'string' and type(v) == 'function' then o[#o + 1] = n .. '.' .. k end end end) "
+            + "end end "
+            + "table.sort(o) hostlist(table.concat(o, '\\n'))";
+    private static String[] sLuaCommands;  // from LIST_LUA, once per run
 
     private static Activity sActivity;
     private static SharedPreferences sPrefs;
@@ -78,7 +99,6 @@ public final class DevTools {
     private static Surface sRateSurface;
     private static float sRateRequested = -1;
     private static long sLastMenu;
-    private static String sLastCommand = "";
 
     private DevTools() {}
 
@@ -284,6 +304,11 @@ public final class DevTools {
         } else {
             int b = padButton(code);
             if (b < 0) return false;  // e.g. BACK, volume: leave to the system
+            int shoulders = (1 << PAD_LB) | (1 << PAD_RB);
+            if (b == PAD_A && down && (sPadKeys & shoulders) == shoulders) {
+                openMenuFromPad();  // LB + RB + A: the developer menu, like a three-finger tap
+                return true;
+            }
             sPadKeys = down ? sPadKeys | (1 << b) : sPadKeys & ~(1 << b);
         }
         sendPad();
@@ -310,6 +335,20 @@ public final class DevTools {
                 | (hy < -0.5f ? 1 << PAD_UP : 0) | (hy > 0.5f ? 1 << PAD_DOWN : 0);
         sendPad();
         return true;
+    }
+
+    /** LB + RB + A: opens the developer menu and lets go of the held buttons in the game. */
+    private static void openMenuFromPad() {
+        sPadKeys = 0;
+        sPadHat = 0;
+        sL2Key = sR2Key = false;
+        sLx = sLy = sRx = sRy = sLt = sRt = 0;
+        sendPad();
+        long now = System.currentTimeMillis();
+        if (now - sLastMenu > 1000) {
+            sLastMenu = now;
+            sHandler.post(DevTools::showMenu);
+        }
     }
 
     private static int stick(float v) {
@@ -529,57 +568,186 @@ public final class DevTools {
         Runtime.getRuntime().exit(0);
     }
 
+    /** A row of the console's command list: a section header (cmd null) or a command. */
+    private static final class Entry {
+        final String text, cmd;
+        Entry(String text, String cmd) { this.text = text; this.cmd = cmd; }
+        @Override public String toString() { return text; }
+    }
+
+    /**
+     * Debug console: output on the left; on the right the list of every command the game's Lua
+     * exposes (handy ones first, then a section per table). Touch: tap a command to select it,
+     * tap again to run it; long press copies it into the text box. Controller: d-pad moves, A
+     * runs, B closes, X shows / hides the text box, L1 / R1 jump between sections. The text box
+     * (keyboard button) is hidden at first; typing in it filters the list, Enter runs the text.
+     */
     private static void showConsole() {
+        final AlertDialog[] dlg = new AlertDialog[1];
         LinearLayout root = new LinearLayout(sActivity);
         root.setOrientation(LinearLayout.VERTICAL);
         int pad = dp(12);
-        root.setPadding(pad, pad / 2, pad, 0);
+        root.setPadding(pad, pad / 2, pad, pad / 2);
 
+        LinearLayout panes = new LinearLayout(sActivity);
+        panes.setOrientation(LinearLayout.HORIZONTAL);
         final TextView out = new TextView(sActivity);
         out.setTypeface(Typeface.MONOSPACE);
         out.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12);
         out.setTextIsSelectable(true);
         final ScrollView scroll = new ScrollView(sActivity);
+        scroll.setFocusable(false);
         scroll.addView(out);
-        root.addView(scroll, new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f));
+        panes.addView(scroll, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 3f));
 
-        LinearLayout row = new LinearLayout(sActivity);
-        row.setOrientation(LinearLayout.HORIZONTAL);
+        final java.util.ArrayList<Entry> shown = new java.util.ArrayList<>();
+        final android.widget.ListView list = new android.widget.ListView(sActivity);
+        list.setChoiceMode(android.widget.AbsListView.CHOICE_MODE_SINGLE);
+        list.setFastScrollEnabled(true);
+        // Visible highlights (the dialog theme's are nearly invisible): the controller / key
+        // selection, and the row a first tap selected.
+        list.setSelector(new android.graphics.drawable.ColorDrawable(0x80FFC107));
+        list.setDrawSelectorOnTop(true);
+        final android.widget.ArrayAdapter<Entry> adapter = new android.widget.ArrayAdapter<Entry>(
+                sActivity, android.R.layout.simple_list_item_activated_1, shown) {
+            @Override public boolean areAllItemsEnabled() { return false; }
+            @Override public boolean isEnabled(int i) { return getItem(i).cmd != null; }
+            @Override public View getView(int i, View convert, ViewGroup parent) {
+                TextView v = (TextView) super.getView(i, convert, parent);
+                boolean header = getItem(i).cmd == null;
+                v.setTypeface(header ? Typeface.DEFAULT_BOLD : Typeface.MONOSPACE);
+                v.setTextSize(TypedValue.COMPLEX_UNIT_SP, header ? 14 : 12);
+                v.setTextColor(header ? 0xFFFFC107 : 0xFFFFFFFF);
+                v.setMinHeight(dp(header ? 32 : 40));
+                android.graphics.drawable.StateListDrawable bg = new android.graphics.drawable.StateListDrawable();
+                bg.addState(new int[] {android.R.attr.state_activated},
+                        new android.graphics.drawable.ColorDrawable(0x60FFC107));
+                bg.addState(new int[0], new android.graphics.drawable.ColorDrawable(0));
+                v.setBackground(bg);
+                return v;
+            }
+        };
+        list.setAdapter(adapter);
+        LinearLayout.LayoutParams listParams =
+                new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 2f);
+        listParams.leftMargin = dp(8);
+        panes.addView(list, listParams);
+        root.addView(panes, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f));
+
+        final LinearLayout inputRow = new LinearLayout(sActivity);
+        inputRow.setOrientation(LinearLayout.HORIZONTAL);
+        inputRow.setVisibility(View.GONE);
         final EditText input = new EditText(sActivity);
         input.setTypeface(Typeface.MONOSPACE);
         input.setSingleLine(true);
-        input.setHint("Lua, e.g. debug.GetAllStamps()");
-        input.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS);
+        input.setHint("Lua, or text to filter the list");
+        // Visible-password: keyboards then skip autocorrect and the auto space after ".".
+        input.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_VISIBLE_PASSWORD
+                | InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS);
         input.setImeOptions(EditorInfo.IME_ACTION_GO | EditorInfo.IME_FLAG_NO_EXTRACT_UI);
-        input.setText(sLastCommand);
-        row.addView(input, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+        inputRow.addView(input, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
         Button run = new Button(sActivity);
         run.setText("Run");
-        row.addView(run);
-        Button examples = new Button(sActivity);
-        examples.setText("…");
-        row.addView(examples);
-        root.addView(row);
+        inputRow.addView(run);
+        root.addView(inputRow);
+
+        LinearLayout bar = new LinearLayout(sActivity);
+        bar.setOrientation(LinearLayout.HORIZONTAL);
+        bar.setGravity(Gravity.CENTER_VERTICAL);
+        final Button keyboard = new Button(sActivity);
+        keyboard.setText("⌨");  // keyboard symbol
+        keyboard.setTextSize(TypedValue.COMPLEX_UNIT_SP, 22);
+        keyboard.setContentDescription("Type a command");
+        bar.addView(keyboard);
+        final TextView hint = new TextView(sActivity);
+        hint.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11);
+        hint.setPadding(dp(8), 0, dp(8), 0);
+        bar.addView(hint, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+        Button close = new Button(sActivity);
+        close.setText("Close");
+        bar.addView(close);
+        root.addView(bar);
 
         final Runnable refresh = new Runnable() {
             @Override public void run() {
                 String text = nativeOutput();
                 if (text.isEmpty()) text = "Lua 5.1 console. Expressions print their value; "
-                        + "print() works. Tables: debug, cq, app, game, appconfig.\n";
+                        + "print() works.\n";
                 out.setText(text);
                 scroll.post(() -> scroll.fullScroll(View.FOCUS_DOWN));
             }
         };
-        final Runnable submit = () -> {
-            String cmd = input.getText().toString().trim();
-            if (cmd.isEmpty()) return;
-            sLastCommand = cmd;
+        final java.util.function.Consumer<String> runCommand = cmd -> {
             nativeCommand(cmd);
-            input.setText("");
             // Commands run on the game thread at its next frame.
             sHandler.postDelayed(refresh, 150);
             sHandler.postDelayed(refresh, 600);
+        };
+        // Fills the list: the handy commands, then the game's functions by table, keeping only
+        // entries containing the filter text.
+        final Runnable fill = () -> {
+            String f = input.getText().toString().trim().toLowerCase(java.util.Locale.ROOT);
+            shown.clear();
+            shown.add(new Entry("Handy", null));
+            for (String[] c : COMMANDS)
+                if (f.isEmpty() || (c[0] + c[1]).toLowerCase(java.util.Locale.ROOT).contains(f))
+                    shown.add(new Entry(c[0] + "  —  " + c[1], c[1]));
+            if (sLuaCommands != null) {
+                String table = null;
+                for (String name : sLuaCommands) {
+                    if (!f.isEmpty() && !name.toLowerCase(java.util.Locale.ROOT).contains(f)) continue;
+                    String t = name.substring(0, name.indexOf('.'));
+                    if (!t.equals(table)) shown.add(new Entry(table = t, null));
+                    shown.add(new Entry(name + "()", name + "()"));
+                }
+            }
+            // Drop headers left without commands.
+            for (int i = shown.size() - 1; i >= 0; i--)
+                if (shown.get(i).cmd == null && (i + 1 == shown.size() || shown.get(i + 1).cmd == null))
+                    shown.remove(i);
+            list.clearChoices();
+            adapter.notifyDataSetChanged();
+            hint.setText(sLuaCommands == null ? "Reading the game's commands…"
+                    : (shown.size() + " rows · tap to select, tap again to run · "
+                       + "pad: A run, X type, L1/R1 sections"));
+        };
+        if (sLuaCommands == null) {
+            nativeCommand(LIST_LUA);  // runs at the game's next frame
+            sHandler.postDelayed(new Runnable() {
+                int tries;
+                @Override public void run() {
+                    String l = nativeCommandList();
+                    if (!l.isEmpty()) {
+                        sLuaCommands = l.split("\n");
+                        fill.run();
+                    } else if (++tries < 50) {
+                        sHandler.postDelayed(this, 200);
+                    }
+                }
+            }, 200);
+        }
+        fill.run();
+
+        list.setOnItemClickListener((parent, v, i, id) -> {
+            String cmd = shown.get(i).cmd;
+            // Touch: a first tap selects, a second runs. Controller / keys: A runs at once.
+            if (!list.isInTouchMode() || list.getCheckedItemPosition() == i) {
+                runCommand.accept(cmd);
+            }
+            list.setItemChecked(i, true);
+        });
+        list.setOnItemLongClickListener((parent, v, i, id) -> {
+            input.setText(shown.get(i).cmd);
+            input.setSelection(input.length());
+            if (inputRow.getVisibility() != View.VISIBLE) keyboard.callOnClick();
+            return true;
+        });
+
+        final Runnable submit = () -> {
+            String cmd = input.getText().toString().trim();
+            if (cmd.isEmpty()) return;
+            input.setText("");
+            runCommand.accept(cmd);
         };
         run.setOnClickListener(v -> submit.run());
         input.setOnEditorActionListener((v, actionId, ev) -> {
@@ -591,25 +759,72 @@ public final class DevTools {
             }
             return false;
         });
-        examples.setOnClickListener(v -> dialog().setTitle("Examples")
-                .setItems(EXAMPLES, (d, which) -> {
-                    input.setText(EXAMPLES[which]);
-                    input.setSelection(input.length());
-                })
-                .show());
+        input.addTextChangedListener(new android.text.TextWatcher() {
+            @Override public void beforeTextChanged(CharSequence t, int a, int b, int c) {}
+            @Override public void onTextChanged(CharSequence t, int a, int b, int c) {}
+            @Override public void afterTextChanged(android.text.Editable e) { fill.run(); }
+        });
 
-        AlertDialog d = dialog().setTitle("Debug command line")
-                .setView(root)
-                .setNegativeButton("Close", null)
-                .create();
-        d.getWindow().setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_STATE_VISIBLE
+        final android.view.inputmethod.InputMethodManager imm =
+                sActivity.getSystemService(android.view.inputmethod.InputMethodManager.class);
+        keyboard.setOnClickListener(v -> {
+            if (inputRow.getVisibility() == View.VISIBLE) {
+                imm.hideSoftInputFromWindow(input.getWindowToken(), 0);
+                inputRow.setVisibility(View.GONE);
+                if (input.length() > 0) input.setText("");  // clear the filter
+                list.requestFocus();
+            } else {
+                inputRow.setVisibility(View.VISIBLE);
+                input.requestFocus();
+                input.post(() -> imm.showSoftInput(input, 0));
+            }
+        });
+        close.setOnClickListener(v -> dlg[0].dismiss());
+
+        AlertDialog d = dialog().setTitle("Debug command line").setView(root).create();
+        dlg[0] = d;
+        // Controller shortcuts (B closes through the system's BUTTON_B -> BACK fallback).
+        d.setOnKeyListener((di, code, ev) -> {
+            if (ev.getAction() != KeyEvent.ACTION_DOWN) return false;
+            switch (code) {
+                case KeyEvent.KEYCODE_BUTTON_X:
+                    keyboard.callOnClick();
+                    return true;
+                case KeyEvent.KEYCODE_BUTTON_L1:
+                case KeyEvent.KEYCODE_BUTTON_R1: {
+                    int step = code == KeyEvent.KEYCODE_BUTTON_R1 ? 1 : -1;
+                    int i = list.getSelectedItemPosition();
+                    if (i < 0) i = list.getFirstVisiblePosition();
+                    if (i < 0 || i >= shown.size()) return true;
+                    // Find the previous/next section header, then select its first command.
+                    if (step < 0) {
+                        while (i > 0 && shown.get(i).cmd != null) i--;  // this section's header
+                        i--;
+                    } else {
+                        i++;
+                    }
+                    while (i >= 0 && i < shown.size() && shown.get(i).cmd != null) i += step;
+                    if (i < 0) i = 0;
+                    if (i < shown.size() - 1) {
+                        list.requestFocus();
+                        list.setSelection(i + 1);  // the section's first command
+                    }
+                    return true;
+                }
+                default:
+                    return false;
+            }
+        });
+        d.getWindow().setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_STATE_ALWAYS_HIDDEN
                 | WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE);
         d.show();
+        // Full height, so the dialog shrinks to the space above the keyboard (adjustResize) and
+        // the text box stays visible while typing.
         d.getWindow().setLayout(
                 (int) (sActivity.getResources().getDisplayMetrics().widthPixels * 0.9),
-                (int) (sActivity.getResources().getDisplayMetrics().heightPixels * 0.9));
+                ViewGroup.LayoutParams.MATCH_PARENT);
         refresh.run();
-        input.requestFocus();
+        list.requestFocus();
     }
 
     private static AlertDialog.Builder dialog() {

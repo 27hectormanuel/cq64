@@ -29,6 +29,7 @@ public final class DevTools {
     static native String nativeOutput();
     static native float nativeFps();
     static native void nativeSetFrameCap(int fps);
+    static native String nativeCommandList();
 
     private static Activity sActivity;
     private static final Handler sHandler = new Handler(Looper.getMainLooper());
