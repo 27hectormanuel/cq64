@@ -49,6 +49,10 @@ cp -r "$DECOMP/AndroidManifest.xml" "$DECOMP/apktool.yml" "$DECOMP/res" "$DECOMP
 # The only game asset is the 1 GB data pack (assets/ant.mp3), zipped in afterwards (FULL=1). Other
 # files in assets/ are not needed (some repacked APKs add splash screens there) and are left out.
 cp "$HERE/java_patch/HostLoader.smali" "$STAGE/smali/com/doublefine/cq/"
+# Adaptive launcher icon made from the game's own icon (both variants; see the XML for details).
+mkdir -p "$STAGE/res/drawable" "$STAGE/res/drawable-anydpi-v26"
+cp "$HERE/java_patch/res/drawable/cq_launcher.xml" "$STAGE/res/drawable/"
+cp "$HERE/java_patch/res/drawable-anydpi-v26/cq_launcher.xml" "$STAGE/res/drawable-anydpi-v26/"
 if [ "$VARIANT" = optimized ]; then
     mkdir -p "$STAGE/res/xml"
     cp "$HERE/java_patch/res/xml/game_mode_config.xml" "$STAGE/res/xml/"
@@ -81,6 +85,9 @@ open(p, "w").write(s)
 p = f"{stage}/AndroidManifest.xml"
 s = open(p).read()
 s = add_app_attrs(s, extractNativeLibs="true")
+# Launcher icon: the adaptive one (java_patch/res/drawable*/cq_launcher.xml).
+assert s.count('android:icon="@drawable/ic_launcher"') == 1
+s = s.replace('android:icon="@drawable/ic_launcher"', 'android:icon="@drawable/cq_launcher"')
 if variant == "optimized" or split:
     s = add_app_attrs(s, debuggable="true")
 open(p, "w").write(s)

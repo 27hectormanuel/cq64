@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- SPDX-License-Identifier: CC0-1.0 -->
+<!-- Adaptive launcher icon (Android 8+) made from the game's own square icon, so modern launchers
+     mask it to their shape instead of shrinking it into a white circle. The layers are 108 dp,
+     of which the middle 72 dp are visible; the icon is inset a little less than the 18 dp border
+     so it bleeds past the mask, and the background (the icon's dark edge colour) only shows
+     during launcher animations. -->
+<adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">
+    <background>
+        <color android:color="#231e12" />
+    </background>
+    <foreground>
+        <inset android:drawable="@drawable/ic_launcher" android:inset="15dp" />
+    </foreground>
+</adaptive-icon>
