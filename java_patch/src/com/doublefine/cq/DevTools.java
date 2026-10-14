@@ -570,6 +570,7 @@ public final class DevTools {
             "Frame rate cap: " + capText,
             "Resolution: " + RES_LABELS[resIndex()],
             "High frame rate: " + simRateLabel(simRate()),
+            "Performance boost: " + (boostOn() ? "ON" : "OFF"),
         };
         dialog().setTitle("Costume Quest dev tools")
                 .setItems(items, (d, which) -> {
@@ -582,8 +583,11 @@ public final class DevTools {
                         showCapPicker();
                     } else if (which == 3) {
                         showResPicker();
-                    } else {
+                    } else if (which == 4) {
                         showSimRatePicker();
+                    } else {
+                        setBoost(!boostOn());
+                        showRestartPrompt();
                     }
                 })
                 .setNegativeButton("Close", null)
@@ -679,6 +683,30 @@ public final class DevTools {
                 })
                 .setNegativeButton("Cancel", null)
                 .show();
+    }
+
+    // Performance boost (libcqhost, read at startup): the engine's simulation and scene graph
+    // thread pools get 2 workers each, as in Costume Quest 2 on PC (files/workers), and the
+    // game's busiest thread is kept on the fastest core with Android performance hints asking
+    // for 60 fps clocks (files/affinity).
+    private static final String[] BOOST_FILES = {"workers", "affinity"};
+
+    private static boolean boostOn() {
+        for (String n : BOOST_FILES)
+            if (!new java.io.File(sActivity.getFilesDir(), n).exists()) return false;
+        return true;
+    }
+
+    private static void setBoost(boolean on) {
+        for (String n : BOOST_FILES) {
+            java.io.File f = new java.io.File(sActivity.getFilesDir(), n);
+            try {
+                if (on) f.createNewFile();
+                else f.delete();
+            } catch (java.io.IOException e) {
+                // left as it was; the menu shows the state
+            }
+        }
     }
 
     private static void showRestartPrompt() {
