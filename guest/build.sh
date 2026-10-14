@@ -3,7 +3,7 @@
 # Builds libguestrt.so: the ARM32 runtime loaded into the emulator alongside the game.
 set -e
 NDK=${NDK:?set NDK to the Android NDK root}
-TC=$NDK/toolchains/llvm/prebuilt/linux-x86_64
+TC=${NDK_TC:-$(ls -d "$NDK"/toolchains/llvm/prebuilt/*/ | head -1)}
 CC=$TC/bin/armv7a-linux-androideabi21-clang
 HERE=$(cd "$(dirname "$0")" && pwd)
 OUT=${1:-$HERE/../out}

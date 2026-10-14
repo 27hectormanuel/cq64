@@ -14,7 +14,7 @@ OUT_DIR=${OUT_DIR:-$ROOT/out}
 BT=$BUILD_TOOLS
 ABIS=("$@")
 [ ${#ABIS[@]} -eq 0 ] && ABIS=(arm64-v8a)
-STRIP=$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-strip
+STRIP=$NDK_TC/bin/llvm-strip
 PKG=com.doublefine.mmoj
 [ -f "$DECOMP/apktool.yml" ] || { echo "no decompiled game in $DECOMP: run scripts/decompile_mmoj.sh first" >&2; exit 1; }
 mkdir -p "$OUT_DIR"

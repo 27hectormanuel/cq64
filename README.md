@@ -55,7 +55,7 @@ into the output unchanged. apktool then rebuilds the patched app.
 
 ## Building
 
-Requirements: Linux, JDK 17+, Python 3, `git`, `curl`, `zip`, `unzip`, and the Android SDK with an
+Requirements: Linux (on Windows: WSL2, [see below](#building-on-windows-wsl2)), JDK 17+, Python 3, `git`, `curl`, `zip`, `unzip`, and the Android SDK with an
 NDK (tested with NDK 29), build-tools, platform 34 and CMake ≥ 3.22 with Ninja.
 
 ```sh
@@ -63,20 +63,87 @@ scripts/fetch_deps.sh          # once: dynarmic, Boost headers, apktool (pinned,
 ```
 
 `scripts/env.sh` finds the SDK in `$ANDROID_HOME` (or `~/Android/Sdk`); set `NDK`,
-`BUILD_TOOLS`, `ANDROID_JAR` or `CMAKE_BIN` to override individual tools.
+`NDK_TC`, `BUILD_TOOLS`, `ANDROID_JAR` or `CMAKE_BIN` to override individual tools.
+
+### Building on Windows (WSL2)
+
+The scripts are Linux shell scripts; on Windows 10/11 they run unchanged in WSL2, a Linux
+system built into Windows. Not tested by the author on Windows (the same steps work on Linux).
+
+1. In PowerShell as administrator: `wsl --install`, restart, and finish setting up Ubuntu.
+2. In the Ubuntu terminal, install the tools and the Linux Android SDK:
+
+   ```sh
+   sudo apt update && sudo apt install -y openjdk-17-jdk python3 git curl zip unzip
+   mkdir -p ~/Android/Sdk/cmdline-tools && cd ~/Android/Sdk/cmdline-tools
+   curl -LO https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip
+   unzip -q commandlinetools-linux-*.zip && mv cmdline-tools latest && rm commandlinetools-linux-*.zip
+   yes | latest/bin/sdkmanager --licenses >/dev/null
+   latest/bin/sdkmanager "ndk;29.0.14206865" "build-tools;36.0.0" "platforms;android-34" "cmake;4.1.2"
+   ```
+
+3. Get the source and your APK into the Linux home folder (building under `/mnt/c` works but
+   is much slower):
+
+   ```sh
+   cd ~ && git clone https://github.com/27hectormanuel/cq64.git && cd cq64
+   cp /mnt/c/Users/<your Windows user>/Downloads/CostumeQuest.apk ~/
+   scripts/build_cq.sh ~/CostumeQuest.apk optimized --abi arm64-v8a     # or: original
+   ```
+
+4. Install it on the phone. Either open the output folder in Explorer with `explorer.exe out`,
+   copy the APK to the phone and open it there, or use Windows' `adb.exe` (Android
+   platform-tools for Windows) from the same terminal:
+
+   ```sh
+   adb.exe install -r --no-incremental "$(wslpath -w out/costumequest64.apk)"
+   ```
+
+   The full APK is the simplest on Windows: `install_split.sh` and `dev_push.sh` call a Linux
+   `adb`, which can't see USB devices in WSL2 without extra setup (`usbipd`).
 
 ### Costume Quest
 
+There are two variants to choose from:
+
+| Variant | What you get | Output |
+|---|---|---|
+| **original** | The game 1:1 as the 32-bit APK plays it: touch only, no developer menu, no data changes. Only what running it on a 64-bit-only phone needs is changed (and a repack's androeed.ru splash is removed). | `out/costumequest64-original.apk` |
+| **optimized** | Controller support with PC-style battle prompts and Xbox button icons, developer menu (Lua console, FPS counter, frame cap, render resolution), full screen, Game Mode, white menu highlight. | `out/costumequest64.apk` |
+
+One step (fetches the dependencies if needed, decompiles your APK, builds a full APK for phones
+and the emulator; asks for the variant if you leave it out):
+
 ```sh
-scripts/decompile.sh CostumeQuest.apk      # your copy of the game -> work/decompiled
-FULL=1 scripts/build_apk.sh arm64-v8a      # -> out/costumequest64.apk
+scripts/build_cq.sh CostumeQuest.apk original     # or: optimized
+adb install -r --no-incremental out/costumequest64-original.apk
+```
+
+Options: `--split` (small APK + `out/cqdata.zip`, see below), `--abi arm64-v8a` or
+`--abi x86_64` to build for one ABI only, `--icon <picture>` (see below).
+
+**Launcher icon:** both variants get an adaptive icon, so modern launchers (e.g. Pixel on
+Android 17) show it in their own shape instead of shrinking the old square icon into a white
+circle. It is made from the 144 px icon in your APK; for a sharper one, pass a higher-resolution
+square picture of the same icon (e.g. the game's 1024 px store icon, `.png`/`.jpg`/`.webp`) with
+`--icon` (or `ICON=` for `build_apk.sh`). The picture is not included here for the same reason
+the game isn't.
+
+Step by step:
+
+```sh
+scripts/decompile.sh CostumeQuest.apk                        # your copy of the game -> work/decompiled
+VARIANT=optimized FULL=1 scripts/build_apk.sh arm64-v8a      # -> out/costumequest64.apk
 adb install -r --no-incremental out/costumequest64.apk
 ```
 
+- `VARIANT=original` or `VARIANT=optimized` (the default).
 - `FULL=1` puts the 1 GB data pack into the APK (simplest to install).
 - `SPLIT=1` builds a small APK and writes the data pack to `out/cqdata.zip`; install both with
-  `scripts/install_split.sh out` (needs about half the free space on the phone).
-- ABIs: `arm64-v8a` for phones, `x86_64` for the emulator (both by default).
+  `scripts/install_split.sh out` (`VARIANT=original scripts/install_split.sh out` for the
+  original variant; needs about half the free space on the phone).
+- ABIs: `arm64-v8a` for phones, `x86_64` for the Android emulator (both by default). Both
+  variants run on an x86_64 emulator image (tested on API 36).
 - Developed against an APK that contains the data pack as `assets/ant.mp3`; APKs that ship it as
   a separate OBB expansion file are untested.
 

@@ -22,7 +22,11 @@ add_subdirectory(${TP}/dynarmic dynarmic EXCLUDE_FROM_ALL)
 set(GAME cq CACHE STRING "Game profile to build")
 set_property(CACHE GAME PROPERTY STRINGS cq mmoj)
 set(GAME_SOURCES src/game_${GAME}.cpp)
-if(GAME STREQUAL "cq")
+# Costume Quest variant: "optimized" (controller support, battle-prompt and icon fixes, data
+# patches, debug hooks) or "original" (the game as the 32-bit APK ships it, running on 64-bit).
+set(CQ_VARIANT optimized CACHE STRING "Costume Quest build variant")
+set_property(CACHE CQ_VARIANT PROPERTY STRINGS optimized original)
+if(GAME STREQUAL "cq" AND NOT CQ_VARIANT STREQUAL "original")
     list(APPEND GAME_SOURCES src/gamepad.cpp src/gamepad.h)
 endif()
 
@@ -51,3 +55,7 @@ add_library(cqhost SHARED
 target_compile_options(cqhost PRIVATE -Wall -Wno-unused-function -fexceptions)
 target_link_libraries(cqhost PRIVATE dynarmic log android EGL GLESv1_CM GLESv2 z)
 target_link_options(cqhost PRIVATE -Wl,--gc-sections -Wl,-z,max-page-size=16384)
+
+if(GAME STREQUAL "cq" AND CQ_VARIANT STREQUAL "original")
+    target_compile_definitions(cqhost PRIVATE CQ_ORIGINAL=1)
+endif()
