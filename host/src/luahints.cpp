@@ -15,6 +15,9 @@
 #include "game.h"
 #include "loader.h"
 
+#include <sys/uio.h>
+#include <unistd.h>
+
 #include <algorithm>
 #include <cctype>
 #include <map>
@@ -29,9 +32,21 @@ struct Binding {
     u32 fn;
 };
 
+// A NUL-terminated guest string copied without faulting: the module's range has unreadable gaps
+// between segments, so a wrongly worked-out pointer must not crash.
+bool safe_string(u32 a, std::string &out) {
+    char buf[128];
+    iovec local{buf, sizeof buf}, remote{g2h(a), sizeof buf};
+    if (process_vm_readv(getpid(), &local, 1, &remote, 1, 0) != (ssize_t)sizeof buf) return false;
+    size_t n = strnlen(buf, sizeof buf);
+    if (n == 0 || n == sizeof buf) return false;
+    out.assign(buf, n);
+    return true;
+}
+
 // Calls to LuaFunctionRegistry::AddFunction in [start, end): ARM code, constants built as
 // "ldr rX, [pc, #n]" + "add rY, rA, rB" (one operand pc or a register holding such a value).
-std::vector<Binding> find_bindings(u32 start, u32 end, u32 add_function) {
+std::vector<Binding> find_bindings(u32 start, u32 end, u32 add_function, u32 mod_lo, u32 mod_hi) {
     std::vector<Binding> out;
     u32 regs[16];
     u16 known = 0;  // bit r: regs[r] is a known constant
@@ -62,10 +77,10 @@ std::vector<Binding> find_bindings(u32 start, u32 end, u32 add_function) {
             else known &= ~(1 << rd_);
         } else if ((x & 0x0f000000) == 0x0b000000) {  // bl
             s32 off = (s32)(x << 8) >> 8;
-            if (a + 8 + off * 4 == add_function && (known & 6) == 6) {
-                const char *name = (const char *)g2h(regs[2]);
-                if (regs[2] && name[0]) out.push_back({name, regs[1]});
-            }
+            std::string name;
+            if (a + 8 + off * 4 == add_function && (known & 6) == 6 && regs[2] >= mod_lo &&
+                regs[2] < mod_hi && regs[1] >= start && regs[1] < end && safe_string(regs[2], name))
+                out.push_back({name, regs[1]});
             known &= ~0x100f;  // r0-r3, r12
         } else if ((x & 0x0c000000) == 0) {  // other data processing: rd changes
             known &= ~(1 << rd_);
@@ -103,7 +118,12 @@ std::string engine_hints(Module *m) {
     std::unordered_map<u32, const char *> readers;
     for (const auto &r : READERS)
         if (u32 a = loader::lookup_in(m, r.first)) readers[a & ~1u] = r.second;
-    std::vector<Binding> binds = find_bindings(m->base, m->base + m->size, add_function & ~1u);
+    // Scan the first (executable) segment only: from the module's start, where the registering
+    // static initializers come before any exported function, to past the last function. The
+    // module's range also covers data and unreadable gaps.
+    if (m->funcs.empty()) return "";
+    u32 text_lo = m->base, text_hi = (m->funcs.back().first & ~3u) + 0x1000;
+    std::vector<Binding> binds = find_bindings(text_lo, text_hi, add_function & ~1u, m->base, m->base + m->size);
     // Function bounds: the next exported function or binding.
     std::vector<u32> starts;
     for (const auto &f : m->funcs) starts.push_back(f.first & ~1u);
@@ -114,7 +134,7 @@ std::string engine_hints(Module *m) {
         u32 fn = b.fn & ~1u;
         if (b.fn & 1) continue;  // Thumb: not scanned
         auto it = std::upper_bound(starts.begin(), starts.end(), fn);
-        u32 end = std::min<u32>(it == starts.end() ? fn + 0x800 : *it, fn + 0x800);
+        u32 end = std::min<u32>({it == starts.end() ? fn + 0x800 : *it, fn + 0x800, text_hi});
         u32 imm[16];
         u16 known = 0;
         int lo = -1, hi = -1;
