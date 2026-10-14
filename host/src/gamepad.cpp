@@ -38,6 +38,7 @@
 #include <cmath>
 #include <cstdlib>
 #include <cstring>
+#include <mutex>
 #include <strings.h>
 #include <string>
 #include <unordered_map>
@@ -71,7 +72,8 @@ u32 g_name_minigame_visible;                // guest Name holding "MinigameVisib
 std::atomic<u32> g_pressed{0};              // buttons pressed since the game thread last looked
 u32 g_bind_texture_orig;
 u32 g_create_image_orig;  // FlashImageCreator::CreateImage
-u32 g_texture_lock;       // RsRef<Texture>::Lock() const                    // RsRef<Texture>::BindFile(const char *, bool)
+u32 g_texture_lock;       // RsRef<Texture>::Lock() const
+std::atomic<bool> g_icons_changed{false};  // icon set changed; switch_icons() on the game thread
 // State last reported to SDL (game thread only). SDL_PrivateJoystickButton posts an event even
 // when nothing changed, which floods SDL's event queue, so only changes are reported.
 u32 g_sent_buttons;
@@ -94,7 +96,10 @@ s32 t_open(u32 joy, s32 index) {
 }
 
 // void SDL_SYS_JoystickUpdate(SDL_Joystick *joystick)
+void switch_icons();
+
 void t_update(u32 joy) {
+    if (g_icons_changed.exchange(false)) switch_icons();
     for (int i = 0; i < NAXES; i++) {
         s32 v = g_axes[i].load(std::memory_order_relaxed);
         if (v == g_sent_axes[i]) continue;
@@ -300,60 +305,173 @@ u32 t_handle_input(u32 vpad) {
 //
 // datapatch adds the Xbox icons to Mobile_InputIcons.gfx, the library every menu imports its
 // button icons from, with their images renamed "X360_*". Images resolve to textures named
-// "UI/Flash/<library>/<image>"; the X360 ones are mapped to Xbox360_ControllerIcons' textures.
+// "UI/Flash/<library>/<image>"; the X360 ones are mapped to Xbox360_ControllerIcons' textures, or
+// to PS3_ControllerIcons' while the controller in use is a PlayStation one
+// (DevTools.nativePadIcons). A few movies carry private copies of Xbox icons (the message box's
+// A/B, the pause screen's stick icons); those are redirected to the PS3 ones too.
+// The icon library is loaded once and stays loaded (the battle HUD, for one, keeps its icons for
+// the whole game), so every icon image created is remembered, and when the controller type
+// changes the game thread points each one at the other set's texture (GImageInfo::SetTexture).
+
+std::atomic<int> g_icon_set{0};  // 0: Xbox, 1: PlayStation
+u32 g_create_platform_texture;  // FlashManager::CreatePlatformTexture(Texture *)
+u32 g_flash_manager;            // &g_pFlashManager
+u32 g_set_texture;              // GImageInfo::SetTexture(GTexture *, unsigned, unsigned)
+u32 g_image_d0_orig, g_image_d1_orig;  // GImageInfo destructors
+std::mutex g_images_mutex;
+std::unordered_map<u32, std::string> g_images;  // live icon GImageInfo -> icon key (see icon_key)
+thread_local std::string t_bound_icon;          // icon key of the texture CreateImage just bound
 
 bool starts_with_ci(const char *s, const char *prefix) { return strncasecmp(s, prefix, strlen(prefix)) == 0; }
 
+// Xbox icon textures (in Xbox360_ControllerIcons unless a folder is given) whose PS3 equivalent
+// has another name. The unnamed ones are the stick icons, matched by picture: R, L, then each
+// stick pushed in a direction.
+constexpr struct { const char *xbox, *ps3; } PS3_NAMES[] = {
+    {"BUTTON_Aorig", "BUTTON_A"},
+    {"MessageBox/MessageBox_IA", "BUTTON_A"},
+    {"MessageBox/MessageBox_I7", "BUTTON_B"},
+    {"xbox360_controllericons_I16", "PS3_ControllerIcons_I14"},  // R
+    {"xbox360_controllericons_I17", "PS3_ControllerIcons_I15"},  // L
+    {"xbox360_controllericons_I18", "PS3_ControllerIcons_I16"},  // R up
+    {"xbox360_controllericons_I19", "PS3_ControllerIcons_I17"},  // R down
+    {"xbox360_controllericons_I1A", "PS3_ControllerIcons_I19"},  // L down
+    {"xbox360_controllericons_I1B", "PS3_ControllerIcons_I18"},  // L up
+    {"xbox360_controllericons_I1C", "PS3_ControllerIcons_I1B"},  // R right
+    {"xbox360_controllericons_I1D", "PS3_ControllerIcons_I1C"},  // R left
+    {"xbox360_controllericons_I1E", "PS3_ControllerIcons_I1A"},  // L right
+    {"xbox360_controllericons_I1F", "PS3_ControllerIcons_I1D"},  // L left
+    {"Pause/Pause_I2B", "PS3_ControllerIcons_I16"},
+    {"Pause/Pause_I34", "PS3_ControllerIcons_I17"},
+    {"Pause/Pause_I49", "PS3_ControllerIcons_I19"},
+    {"Pause/Pause_I40", "PS3_ControllerIcons_I18"},
+    {"Pause/Pause_I2E", "PS3_ControllerIcons_I1B"},
+    {"Pause/Pause_I31", "PS3_ControllerIcons_I1C"},
+    {"Pause/Pause_I43", "PS3_ControllerIcons_I1A"},
+    {"Pause/Pause_I46", "PS3_ControllerIcons_I1D"},
+};
+
+// The PS3 texture for an Xbox icon file name ("BUTTON_Y.dds", or "<folder>/<file>" for the
+// private copies), or "" if it has none.
+std::string ps3_texture(const char *name) {
+    const char *ext = strrchr(name, '.');
+    size_t len = ext ? ext - name : strlen(name);
+    for (const auto &m : PS3_NAMES)
+        if (strlen(m.xbox) == len && strncasecmp(name, m.xbox, len) == 0)
+            return std::string("UI/Flash/PS3_ControllerIcons/") + m.ps3 + (ext ? ext : "");
+    return strchr(name, '/') ? "" : std::string("UI/Flash/PS3_ControllerIcons/") + name;
+}
+
+// Icon key of a texture path: "X360_<file>" for the library's Xbox images, "<folder>/<file>" for
+// the private copies, "" for anything else.
+std::string icon_key(const char *path) {
+    if (!path || !starts_with_ci(path, "UI/Flash/")) return "";
+    const char *rel = path + 9, *slash = strchr(rel, '/');
+    if (!slash) return "";
+    if (starts_with_ci(slash + 1, "X360_")) return slash + 1;
+    return ps3_texture(rel).empty() ? "" : rel;
+}
+
+// Texture path of an icon in an icon set.
+std::string icon_path(const std::string &key, int set) {
+    if (starts_with_ci(key.c_str(), "X360_")) {
+        const char *name = key.c_str() + 5;
+        return set == 1 ? ps3_texture(name) : std::string("UI/Flash/Xbox360_ControllerIcons/") + name;
+    }
+    return set == 1 ? ps3_texture(key.c_str()) : "UI/Flash/" + key;
+}
+
+// Guest copy of a string, kept for good (texture paths; a few dozen).
+u32 guest_string(const std::string &s) {
+    static std::unordered_map<std::string, u32> cache;
+    u32 &g = cache[s];
+    if (!g) {
+        g = mem::halloc(s.size() + 1, 4);
+        memcpy(g2h(g), s.c_str(), s.size() + 1);
+    }
+    return g;
+}
+
 // RsRef<Texture> RsRef<Texture>::BindFile(const char *path, bool)
 u32 t_bind_texture(u32 path, u32 flag) {
-    const char *p = (const char *)g2h(path);
-    if (p && starts_with_ci(p, "UI/Flash/")) {
-        const char *slash = strchr(p + 9, '/');
-        if (slash && starts_with_ci(slash + 1, "X360_")) {
-            std::string mapped = std::string("UI/Flash/Xbox360_ControllerIcons/") + (slash + 6);
-            static std::unordered_map<std::string, u32> cache;  // guest copies of mapped paths
-            u32 &g = cache[mapped];
-            if (!g) {
-                g = mem::halloc(mapped.size() + 1, 4);
-                memcpy(g2h(g), mapped.c_str(), mapped.size() + 1);
-                LOGI("gamepad: icon texture %s -> %s", p, mapped.c_str());
-            }
-            path = g;
+    std::string key = icon_key((const char *)g2h(path));
+    if (!key.empty()) {
+        std::string mapped = icon_path(key, g_icon_set.load(std::memory_order_relaxed));
+        if (strcasecmp(mapped.c_str(), (const char *)g2h(path)) != 0) {
+            static std::unordered_map<std::string, bool> logged;
+            if (!logged[mapped]) logged[mapped] = true, LOGI("gamepad: icon texture %s -> %s", (const char *)g2h(path), mapped.c_str());
+            path = guest_string(mapped);
         }
     }
+    t_bound_icon = std::move(key);
     return cpu::call32(g_bind_texture_orig, {path, flag});
 }
 
-// GImageInfo *FlashImageCreator::CreateImage(const GFxImageCreateInfo &)
-// Images get their texture's size, but Xbox360_ControllerIcons' A is a 64x64 texture where the
-// menus expect a 32x32 icon (the Xbox library drew it through a half-size sprite). For the
-// library's X360 images, use the size the library declares instead, scaling the texture to fit.
-u32 t_create_image(u32 self, u32 info) {
-    u32 image = cpu::call32(g_create_image_orig, {self, info});
-    u32 file_info = rd<u32>(info + 0xc);
-    if (!image || rd<u32>(info) != 2 || !file_info) return image;
-    u32 name_data = rd<u32>(file_info + 0x18);  // GFxString file name
-    const char *name = name_data ? (const char *)g2h(name_data + 0xc) : "";
-    const char *base = strrchr(name, '/');
-    if (!starts_with_ci(base ? base + 1 : name, "X360_")) return image;
-    u16 w = rd<u16>(file_info + 0x1c), h = rd<u16>(file_info + 0x1e);  // declared size
-    if (!w || !h) return image;
-    // GFx maps fills to the texture by the texture's own size, so the Texture is relabeled too
-    // (it is already uploaded; only the size the renderer scales by changes).
-    std::string path = std::string("UI/Flash/Xbox360_ControllerIcons/") + ((base ? base + 1 : name) + 5);
-    static u32 buf = mem::halloc(256, 4), ref = mem::halloc(4, 4);
-    if (path.size() >= 256) return image;
-    memcpy(g2h(buf), path.c_str(), path.size() + 1);
-    u32 bound = cpu::call32(g_bind_texture_orig, {buf, 1});
-    wr<u32>(ref, bound);
+// The loaded Texture for a path, labelled with the size its image declares: images get their
+// texture's size, but Xbox360_ControllerIcons' A is a 64x64 texture where the menus expect a
+// 32x32 icon (the Xbox library drew it through a half-size sprite), and GFx maps fills to the
+// texture by the texture's own size, so the (already uploaded) Texture is relabelled; this also
+// fits the PS3 textures into the Xbox icons' sizes. Each path is bound once; its reference is
+// kept, so the texture stays loaded.
+u32 icon_texture(const std::string &path, u32 w, u32 h) {
+    static std::unordered_map<std::string, u32> refs;  // path -> guest RsRef<Texture>
+    u32 &ref = refs[path];
+    if (!ref) {
+        ref = mem::halloc(4, 4);
+        wr<u32>(ref, cpu::call32(g_bind_texture_orig, {guest_string(path), 1}));
+    }
     u32 tex = cpu::call32(g_texture_lock, {ref});
     if (tex && (rd<u16>(tex + 0x24) != w || rd<u16>(tex + 0x26) != h)) {
-        LOGI("gamepad: icon %s: %ux%u texture drawn as %ux%u", base ? base + 1 : name, rd<u16>(tex + 0x24),
-             rd<u16>(tex + 0x26), w, h);
+        LOGI("gamepad: icon %s: %ux%u texture drawn as %ux%u", path.c_str(), rd<u16>(tex + 0x24), rd<u16>(tex + 0x26), w, h);
         wr<u16>(tex + 0x24, w), wr<u16>(tex + 0x26, h);
     }
+    return tex;
+}
+
+// GImageInfo *FlashImageCreator::CreateImage(const GFxImageCreateInfo &)
+// For icon images, uses the size the movie declares (see icon_texture) and remembers the image.
+u32 t_create_image(u32 self, u32 info) {
+    t_bound_icon.clear();
+    u32 image = cpu::call32(g_create_image_orig, {self, info});
+    std::string key = std::move(t_bound_icon);
+    u32 file_info = rd<u32>(info + 0xc);
+    if (!image || key.empty() || rd<u32>(info) != 2 || !file_info) return image;
+    u16 w = rd<u16>(file_info + 0x1c), h = rd<u16>(file_info + 0x1e);  // declared size
+    if (!w || !h) return image;
+    icon_texture(icon_path(key, g_icon_set.load(std::memory_order_relaxed)), w, h);
     wr<u32>(image + 0x1c, w), wr<u32>(image + 0x20, h);  // GImageInfo Width, Height
+    std::lock_guard<std::mutex> lock(g_images_mutex);
+    g_images[image] = std::move(key);
     return image;
+}
+
+// GImageInfo::~GImageInfo (complete and deleting): forget the image.
+u32 t_image_d1(u32 self) {
+    { std::lock_guard<std::mutex> lock(g_images_mutex); g_images.erase(self); }
+    return cpu::call32(g_image_d1_orig, {self});
+}
+u32 t_image_d0(u32 self) {
+    { std::lock_guard<std::mutex> lock(g_images_mutex); g_images.erase(self); }
+    return cpu::call32(g_image_d0_orig, {self});
+}
+
+// Points every live icon image at the current icon set's texture (game thread).
+void switch_icons() {
+    int set = g_icon_set.load(std::memory_order_relaxed);
+    u32 manager = rd<u32>(g_flash_manager);
+    if (!manager) return;
+    std::lock_guard<std::mutex> lock(g_images_mutex);
+    for (const auto &[image, key] : g_images) {
+        u32 w = rd<u32>(image + 0x1c), h = rd<u32>(image + 0x20);
+        u32 tex = icon_texture(icon_path(key, set), w, h);
+        u32 gtex = tex ? cpu::call32(g_create_platform_texture, {manager, tex}) : 0;
+        if (!gtex) continue;
+        cpu::call32(g_set_texture, {image, gtex, w, h});  // takes its own reference
+        u32 refs = rd<u32>(gtex + 4);
+        wr<u32>(gtex + 4, refs - 1);
+        if (refs == 1) cpu::call32(rd<u32>(rd<u32>(gtex) + 4), {gtex});  // GRefCountBase release
+    }
+    LOGI("gamepad: %zu icon images switched to %s", g_images.size(), set == 1 ? "PlayStation" : "Xbox");
 }
 
 // void Battle_PushFlashVars(FlashValueSnapshot *)
@@ -366,6 +484,13 @@ void t_push_vars(u32 snapshot) {
     // The tap targets around a prompt are for touch; with a controller the prompt text (with its
     // button icon) is all the PC version shows.
     if (!show_pc) cpu::call32(g_set_bool, {snapshot, g_name_minigame_visible, 0});
+}
+
+void j_pad_icons(JNIEnv *, jclass, jint set) {
+    if (g_icon_set.exchange(set == 1, std::memory_order_relaxed) != (set == 1)) {
+        LOGI("gamepad: button icons: %s", set == 1 ? "PlayStation" : "Xbox");
+        g_icons_changed.store(true);
+    }
 }
 
 void j_pad(JNIEnv *, jclass, jint buttons, jint lx, jint ly, jint rx, jint ry, jint lt, jint rt) {
@@ -427,7 +552,12 @@ void install(Module *cq) {
         g_texture_lock = loader::lookup_in(cq, "_ZNK5RsRefI7TextureE4LockEv");
         g_create_image_orig = hook_arm(cq, "_ZN17FlashImageCreator11CreateImageERK18GFxImageCreateInfo",
                                        cpu::add_thunk("pad_create_image", &abi::wrapped<t_create_image>));
-        LOGI("gamepad: button icons: mobile + Xbox library");
+        g_image_d0_orig = hook_arm(cq, "_ZN10GImageInfoD0Ev", cpu::add_thunk("pad_image_d0", &abi::wrapped<t_image_d0>));
+        g_image_d1_orig = hook_arm(cq, "_ZN10GImageInfoD1Ev", cpu::add_thunk("pad_image_d1", &abi::wrapped<t_image_d1>));
+        g_create_platform_texture = need("_ZN12FlashManager21CreatePlatformTextureEP7Texture");
+        g_flash_manager = need("g_pFlashManager");
+        g_set_texture = need("_ZN10GImageInfo10SetTextureEP8GTexturejj");
+        LOGI("gamepad: button icons: mobile + Xbox/PlayStation library");
     }
     g_prepare_orig = hook_arm(cq, "_Z22Battle_PrepareMiniGame12BattlePrompt",
                               cpu::add_thunk("pad_prepare", &abi::wrapped<t_prepare>));
@@ -446,7 +576,8 @@ void register_natives(JNIEnv *env) {
     }
     static const JNINativeMethod m[] = {
         {"nativePad", "(IIIIIII)V", (void *)&j_pad},
+        {"nativePadIcons", "(I)V", (void *)&j_pad_icons},
     };
-    if (env->RegisterNatives(c, m, 1) != JNI_OK) fatal("RegisterNatives DevTools gamepad natives failed");
+    if (env->RegisterNatives(c, m, 2) != JNI_OK) fatal("RegisterNatives DevTools gamepad natives failed");
 }
 }  // namespace gamepad

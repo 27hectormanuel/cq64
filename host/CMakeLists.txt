@@ -27,7 +27,7 @@ set(GAME_SOURCES src/game_${GAME}.cpp)
 set(CQ_VARIANT optimized CACHE STRING "Costume Quest build variant")
 set_property(CACHE CQ_VARIANT PROPERTY STRINGS optimized original)
 if(GAME STREQUAL "cq" AND NOT CQ_VARIANT STREQUAL "original")
-    list(APPEND GAME_SOURCES src/gamepad.cpp src/gamepad.h)
+    list(APPEND GAME_SOURCES src/gamepad.cpp src/gamepad.h src/simrate.cpp src/simrate.h)
 endif()
 
 add_library(cqhost SHARED
@@ -38,6 +38,10 @@ add_library(cqhost SHARED
     src/datapatch.h
     src/devtools.cpp
     src/devtools.h
+    src/luahints.cpp
+    src/luahints.h
+    src/affinity.cpp
+    src/affinity.h
     src/game.h
     src/host_main.cpp
     src/jni_bridge.cpp

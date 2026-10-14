@@ -17,6 +17,8 @@
 
 #include "abi.h"
 #include "game.h"
+#include "affinity.h"
+#include "luahints.h"
 
 #include <atomic>
 #include <cstdio>
@@ -33,7 +35,8 @@ std::atomic<float> g_fps{0};
 std::atomic<int> g_cap_fps{0};  // 0 = uncapped
 
 std::mutex g_out_lock;
-std::string g_out;  // recent console output, oldest first
+std::string g_out;   // recent console output, oldest first
+std::string g_list;  // text from hostlist() (the console's command list), not shown as output
 
 void output(const std::string &line) {
     LOGI("console: %s", line.c_str());
@@ -65,6 +68,19 @@ s32 t_hostprint(u32 L) {
     u32 len = mem::halloc(4);
     u32 p = cpu::call32(tolstring, {L, 1, len});
     output(p ? std::string((const char *)g2h(p), rd<u32>(len)) : "(nil)");
+    mem::hfree(len);
+    return 0;
+}
+
+// lua_CFunction: hostlist(text) -- appends to the command list the dev menu reads
+s32 t_hostlist(u32 L) {
+    static const u32 tolstring = sym(game_lib(), "lua_tolstring");
+    u32 len = mem::halloc(4);
+    u32 p = cpu::call32(tolstring, {L, 1, len});
+    if (p) {
+        std::lock_guard<std::mutex> lk(g_out_lock);
+        g_list.append((const char *)g2h(p), rd<u32>(len));
+    }
     mem::hfree(len);
     return 0;
 }
@@ -105,18 +121,23 @@ void run_queued() {
     static const u32 copy = sym(game_lib(), "_ZN6String4CopyEPKci");
     static const u32 exec = sym(game_lib(), "_ZN7Console14ExecuteCommandERK6Stringi");
     static bool registered = false;
-    if (!registered) {  // _G.hostprint = <host thunk>
+    if (!registered) {  // _G.hostprint, _G.hostlist = <host thunks>
         u32 L = rd<u32>(console + 0x18);
-        u32 fn = cpu::add_thunk("hostprint", &abi::wrapped<t_hostprint>);
-        u32 name = mem::hstrdup("hostprint");
-        cpu::call32(sym(game_lib(), "lua_pushcclosure"), {L, fn, 0});
-        cpu::call32(sym(game_lib(), "lua_setfield"), {L, (u32)-10002, name});  // LUA_GLOBALSINDEX
-        mem::hfree(name);
+        auto set_global = [&](const char *name, u32 fn) {
+            u32 n = mem::hstrdup(name);
+            cpu::call32(sym(game_lib(), "lua_pushcclosure"), {L, fn, 0});
+            cpu::call32(sym(game_lib(), "lua_setfield"), {L, (u32)-10002, n});  // LUA_GLOBALSINDEX
+            mem::hfree(n);
+        };
+        set_global("hostprint", cpu::add_thunk("hostprint", &abi::wrapped<t_hostprint>));
+        set_global("hostlist", cpu::add_thunk("hostlist", &abi::wrapped<t_hostlist>));
         registered = true;
     }
     for (const std::string &c : cmds) {
-        output("> " + c);
-        u32 text = mem::hstrdup(wrap(c).c_str());
+        // Commands starting with \x01 are the dev menu's own Lua: run as is, not echoed.
+        bool raw = !c.empty() && c[0] == '\x01';
+        if (!raw) output("> " + c);
+        u32 text = mem::hstrdup(raw ? c.c_str() + 1 : wrap(c).c_str());
         u32 str = mem::halloc(16);  // String (Array<char>): count|flags, capacity|flags, data
         memset(g2h(str), 0, 16);
         cpu::call32(copy, {str, text, 0xffffffff});
@@ -144,6 +165,12 @@ jstring j_output(JNIEnv *env, jclass) {
     std::lock_guard<std::mutex> lk(g_out_lock);
     return env->NewStringUTF(g_out.c_str());
 }
+jstring j_command_list(JNIEnv *env, jclass) {
+    std::lock_guard<std::mutex> lk(g_out_lock);
+    return env->NewStringUTF(g_list.c_str());
+}
+// Built on first call (scans the game's code and scripts): call it off the UI thread.
+jstring j_command_hints(JNIEnv *env, jclass) { return env->NewStringUTF(luahints::get().c_str()); }
 jfloat j_fps(JNIEnv *, jclass) { return g_fps; }
 void j_set_frame_cap(JNIEnv *, jclass, jint fps) {
     LOGI("frame cap -> %d", fps);
@@ -160,6 +187,7 @@ void submit(const std::string &cmd) {
 }
 
 void frame_presented() {
+    affinity::frame_presented();
     // Pace to the cap: sleep until this frame's slot, resetting the schedule after a stall.
     static s64 next = 0;
     if (int cap = g_cap_fps) {
@@ -205,8 +233,10 @@ void register_natives(JNIEnv *env) {
         {"nativeOutput", "()Ljava/lang/String;", (void *)&j_output},
         {"nativeFps", "()F", (void *)&j_fps},
         {"nativeSetFrameCap", "(I)V", (void *)&j_set_frame_cap},
+        {"nativeCommandList", "()Ljava/lang/String;", (void *)&j_command_list},
+        {"nativeCommandHints", "()Ljava/lang/String;", (void *)&j_command_hints},
     };
-    if (env->RegisterNatives(c, m, 4) != JNI_OK) fatal("RegisterNatives DevTools failed");
+    if (env->RegisterNatives(c, m, 6) != JNI_OK) fatal("RegisterNatives DevTools failed");
     env->DeleteLocalRef(c);
 }
 }  // namespace devtools

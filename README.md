@@ -165,9 +165,17 @@ the phone's `Android/obb/com.doublefine.mmoj/` folder rather than inside the APK
 - **Full screen and Game Mode** in both games: Performance = uncapped (display's highest
   refresh rate), Standard = 60 fps, Battery = 30 fps.
 - Costume Quest:
-  - **Three-finger tap** opens the developer menu: FPS counter, Lua debug command line, frame
-    rate cap and render resolution. How the debug console works, and how to send Lua commands
-    over adb: [docs/debug-console.md](docs/debug-console.md).
+  - **Three-finger tap** (or **LB + RB + A** on a controller) opens the developer menu: FPS
+    counter, Lua debug command line, frame rate cap and render resolution. The command line
+    lists every function the game's Lua exposes (tap to select, tap again to run; A runs with a
+    controller) and filters the list as you type (⌨ button / X). How the debug console works,
+    and how to send Lua commands over adb: [docs/debug-console.md](docs/debug-console.md).
+  - **High frame rate** (developer menu → FPS & Performance, experimental): runs the game world at 60 (or 120)
+    simulation ticks per second instead of 30, as Costume Quest 2's "60 FPS" option does; the
+    world otherwise shows 30 distinct frames a second however fast it is drawn. **Performance
+    boost** gives the engine's thread pools worker threads (as on PC) and keeps the game's
+    busiest thread on the fastest core with Android performance hints. 60 Hz needs the CPU at
+    full speed: a warm, throttled phone can end up below a steady 30. Both apply on restart.
   - **Controllers** work everywhere. Battle prompts are played with the buttons, as in the PC
     version: press, mash or time the button the prompt shows (A = green, B = red, X = blue,
     Y = yellow), flick the left stick or d-pad for swipe prompts, and wiggle the left stick to

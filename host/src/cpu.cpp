@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: CC0-1.0
 #include "cpu.h"
+#include "game.h"
 #include "loader.h"
 
 #include <dynarmic/interface/A32/a32.h>
@@ -172,6 +173,10 @@ GuestThread *create_thread() {
     // The arm64 backend supports at most 128 MiB (branch range).
     conf.code_cache_size = t->processor_id == 0 ? 128 * 1024 * 1024 : 64 * 1024 * 1024;
     conf.coprocessors[15] = std::make_shared<CP15>(t);
+    // Fast dispatch (indirect branches and returns look up a per-thread table in emitted code
+    // before calling into the translator) is on unless files/nofastdispatch exists, for A/B tests.
+    static const bool no_fast_dispatch = access((game::files_dir() + "/nofastdispatch").c_str(), F_OK) == 0;
+    if (no_fast_dispatch) conf.optimizations &= ~OptimizationFlag::FastDispatch;
     t->jit = std::make_unique<A32::Jit>(conf);
     t->jit->SetCpsr(0x10);  // user mode, ARM state
     t->jit->SetFpscr(0);

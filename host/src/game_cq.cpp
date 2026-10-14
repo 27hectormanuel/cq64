@@ -9,6 +9,7 @@
 #include "devtools.h"
 #include "game.h"
 #include "gamepad.h"
+#include "simrate.h"
 #include "loader.h"
 #include "natives.h"
 #include "paths.h"
@@ -52,7 +53,10 @@ void setup() {
 #ifdef CQ_ORIGINAL
 void after_load(Module *) {}
 #else
-void after_load(Module *main) { gamepad::install(main); }
+void after_load(Module *main) {
+    gamepad::install(main);
+    simrate::install(main);  // before the game initializes
+}
 #endif
 
 void register_natives(JNIEnv *env) {

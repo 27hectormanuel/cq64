@@ -9,7 +9,9 @@
 | [stb_sprintf](https://github.com/nothings/stb) 1.10 | `third_party/misc/stb_sprintf.h` | MIT or public domain | printf family for the guest runtime |
 
 `scripts/fetch_deps.sh` pins the exact dynarmic commit and checks the SHA-256 of the Boost and
-Apktool downloads.
+Apktool downloads. It then applies this project's dynarmic changes from `patches/` (0BSD, like
+dynarmic): `dynarmic-arm64-fast-dispatch.patch` adds the fast dispatch lookup table to the arm64
+backend's A32 dispatcher.
 
 The games themselves — Costume Quest's `libCq.so`, Middle Manager of Justice's `libmmoj.so` (built
 on the Moai SDK), the FMOD Ex libraries, their Java code and data packs — belong to Double Fine
