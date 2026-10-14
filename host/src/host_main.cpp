@@ -2,6 +2,7 @@
 // Entry point: loaded by Java in place of the game's 32-bit libraries. Boots the emulator, loads
 // the ARM32 libraries listed by the game profile (game_<name>.cpp) and forwards the Java native
 // methods into them.
+#include "affinity.h"
 #include "abi.h"
 #include "game.h"
 #include "jni_bridge.h"
@@ -108,6 +109,7 @@ extern "C" JNIEXPORT jint JNI_OnLoad(JavaVM *vm, void *) {
     // Guest crash reports also go to files/crash.log: logcat can drop them when the game logs a lot.
     setenv("CQ_CRASH_LOG", (game::files_dir() + "/crash.log").c_str(), 1);
     game::setup();
+    affinity::start(game::files_dir() + "/affinity");  // opt-in: game thread on the fast core
 
     // The ARM32 libraries ship next to us, renamed so the installer treats them as plain files.
     std::string dir = own_dir();

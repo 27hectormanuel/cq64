@@ -17,6 +17,7 @@
 
 #include "abi.h"
 #include "game.h"
+#include "affinity.h"
 #include "luahints.h"
 
 #include <atomic>
@@ -186,6 +187,7 @@ void submit(const std::string &cmd) {
 }
 
 void frame_presented() {
+    affinity::frame_presented();
     // Pace to the cap: sleep until this frame's slot, resetting the schedule after a stall.
     static s64 next = 0;
     if (int cap = g_cap_fps) {

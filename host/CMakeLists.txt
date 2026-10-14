@@ -40,6 +40,8 @@ add_library(cqhost SHARED
     src/devtools.h
     src/luahints.cpp
     src/luahints.h
+    src/affinity.cpp
+    src/affinity.h
     src/game.h
     src/host_main.cpp
     src/jni_bridge.cpp

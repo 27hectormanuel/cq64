@@ -15,6 +15,11 @@
 //  - SimWorld::_UpdateTimeScale recomputes them for slow motion from hard-coded 1/30 and 30
 //    (CQ2 reads its globals): hooked to recompute them at the new rate.
 // Opt-in (files/simrate holds the rate, written by the developer menu), applied at startup.
+//
+// Worker threads: the engine spreads simulation tasks (animation, particles, visibility) and
+// scene graph work over thread pools. Costume Quest 2 on PC gives them 2 worker threads each;
+// this Android build creates the simulation pool with none and the scene graph's with one, so
+// nearly everything runs on the game thread (one core). With files/workers, both get 2.
 #include "simrate.h"
 
 #include "abi.h"
@@ -22,6 +27,7 @@
 #include "loader.h"
 
 #include <cstdio>
+#include <unistd.h>
 
 namespace simrate {
 namespace {
@@ -65,6 +71,23 @@ bool patch_movt(u32 fn, u16 from, u16 to) {
     }
     return false;
 }
+// "mov r1, #from" at fn + off becomes "mov r1, #to" (the ThreadPool worker count argument).
+bool patch_mov_r1(u32 fn, u32 off, u8 from, u8 to) {
+    if (rd<u32>(fn + off) != (0xe3a01000u | from)) return false;
+    wr<u32>(fn + off, 0xe3a01000u | to);
+    return true;
+}
+
+void enable_workers(Module *cq) {
+    if (access((game::files_dir() + "/workers").c_str(), F_OK) != 0) return;
+    u32 sim = loader::lookup_in(cq, "_ZN8SimWorld27_InitializeDefaultThreadingEb") & ~1u;
+    u32 scene = loader::lookup_in(cq, "_ZN10SceneGraphC2Ev") & ~1u;
+    // Both branches of SimWorld::_InitializeDefaultThreading pass 0 threads; SceneGraph's pool 1.
+    bool ok = sim && scene && patch_mov_r1(sim, 0x64, 0, 2) && patch_mov_r1(sim, 0x84, 0, 2) &&
+              patch_mov_r1(scene, 0x768, 1, 2);
+    LOGI(ok ? "simrate: 2 worker threads for simulation and scene graph tasks"
+            : "simrate: thread pool setup not as expected; workers unchanged");
+}
 }  // namespace
 
 int configured_rate() {
@@ -77,6 +100,7 @@ int configured_rate() {
 }
 
 void install(Module *cq) {
+    enable_workers(cq);
     int hz = configured_rate();
     if (hz == 30) return;
     u32 period = loader::lookup_in(cq, "_ZN8SimWorld25kfDefaultSimulationPeriodE");
