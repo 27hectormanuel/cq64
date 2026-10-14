@@ -2,13 +2,16 @@
 // libandroid imports. ANativeWindow pointers are 64-bit, so the guest gets small handles.
 #include "abi.h"
 #include "devtools.h"
+#include "game.h"
 #include "jni_bridge.h"
 
 #include <android/native_window_jni.h>
 #include <EGL/egl.h>
+#include <GLES2/gl2.h>
 
 #include <mutex>
 #include <time.h>
+#include <unistd.h>
 #include <vector>
 
 namespace {
@@ -144,7 +147,16 @@ u32 t_eglQuerySurface(u32 d, u32 s, s32 attr, G<EGLint> v) {
     return eglQuerySurface(g_dpys.to_host(d), g_surfs.to_host(s), attr, v);
 }
 THUNK(eglQuerySurface, t_eglQuerySurface);
-u32 t_eglWaitGL() { return eglWaitGL(); }
+// The render thread calls eglWaitGL every frame, and on Mali that waits for the GPU to go idle:
+// the CPU and GPU take turns instead of overlapping, about a third of the render thread's time.
+// Nothing native draws into the window on Android, so with the performance boost
+// (files/affinity) the commands are only flushed; eglSwapBuffers keeps frames in order.
+u32 t_eglWaitGL() {
+    static const bool flush_only = access((game::files_dir() + "/affinity").c_str(), F_OK) == 0;
+    if (!flush_only) return eglWaitGL();
+    glFlush();
+    return EGL_TRUE;
+}
 THUNK(eglWaitGL, t_eglWaitGL);
 u32 t_eglWaitNative(s32 e) { return eglWaitNative(e); }
 THUNK(eglWaitNative, t_eglWaitNative);

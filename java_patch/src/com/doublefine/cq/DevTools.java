@@ -488,9 +488,19 @@ public final class DevTools {
         int cap = effectiveCap();
         if (cap != sAppliedCap) {
             sAppliedCap = cap;
-            nativeSetFrameCap(cap);
+            // A rate the display runs at is paced by its vsync alone. libcqhost's own sleep
+            // before the swap isn't aligned with vsync and makes about 1 frame in 6 miss it
+            // (33 ms instead of 16.7), so it's only for rates the display doesn't offer.
+            nativeSetFrameCap(displayOffers(cap) ? 0 : cap);
         }
         requestDisplayRate(cap == 0 ? maxRefreshRate() : cap);
+    }
+
+    private static boolean displayOffers(int fps) {
+        if (fps <= 0 || Build.VERSION.SDK_INT < 30) return false;
+        for (float r : sActivity.getWindowManager().getDefaultDisplay().getSupportedRefreshRates())
+            if (Math.abs(r - fps) < 0.5f) return true;
+        return false;
     }
 
     private static float maxRefreshRate() {
@@ -703,7 +713,8 @@ public final class DevTools {
     // Performance boost (libcqhost, read at startup): the engine's simulation and scene graph
     // thread pools get 2 workers each, as in Costume Quest 2 on PC (files/workers), and the
     // game's busiest thread is kept on the fastest core with Android performance hints asking
-    // for 60 fps clocks (files/affinity).
+    // for 60 fps clocks, and the render thread no longer waits for the GPU each frame
+    // (files/affinity).
     private static final String[] BOOST_FILES = {"workers", "affinity"};
 
     private static boolean boostOn() {
