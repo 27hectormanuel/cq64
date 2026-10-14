@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- SPDX-License-Identifier: CC0-1.0 -->
+<!-- Monochrome layer of the adaptive icon (Android 13+ themed icons): a knight helmet and a robot
+     head, the two costumes on the game's icon, drawn for this project. Only the shape (alpha)
+     is used; the launcher picks the colour. Kept inside the 66 dp safe zone of the 108 dp layer. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp" android:height="108dp" android:viewportWidth="108" android:viewportHeight="108">
+    <path android:fillColor="#FFFFFFFF" android:fillType="evenOdd" android:pathData="M25,57 a15,15 0 1,0 30,0 a15,15 0 1,0 -30,0 z M31,56 H49 a2,2 0 0,1 2,2 V58 a2,2 0 0,1 -2,2 H31 a2,2 0 0,1 -2,-2 V58 a2,2 0 0,1 2,-2 z M35,45 H35 a1,1 0 0,1 1,1 V51 a1,1 0 0,1 -1,1 H35 a1,1 0 0,1 -1,-1 V46 a1,1 0 0,1 1,-1 z M40,45 H40 a1,1 0 0,1 1,1 V51 a1,1 0 0,1 -1,1 H40 a1,1 0 0,1 -1,-1 V46 a1,1 0 0,1 1,-1 z M45,45 H45 a1,1 0 0,1 1,1 V51 a1,1 0 0,1 -1,1 H45 a1,1 0 0,1 -1,-1 V46 a1,1 0 0,1 1,-1 z" />
+    <path android:fillColor="#FFFFFFFF" android:fillType="evenOdd" android:pathData="M62,43 H80 a3,3 0 0,1 3,3 V67 a3,3 0 0,1 -3,3 H62 a3,3 0 0,1 -3,-3 V46 a3,3 0 0,1 3,-3 z M64.5,49 H77.5 a2,2 0 0,1 2,2 V62 a2,2 0 0,1 -2,2 H64.5 a2,2 0 0,1 -2,-2 V51 a2,2 0 0,1 2,-2 z M64.5,56 a2.5,2.5 0 1,0 5.0,0 a2.5,2.5 0 1,0 -5.0,0 z M72.5,56 a2.5,2.5 0 1,0 5.0,0 a2.5,2.5 0 1,0 -5.0,0 z M70.5,35 H71.5 a0.5,0.5 0 0,1 0.5,0.5 V42.5 a0.5,0.5 0 0,1 -0.5,0.5 H70.5 a0.5,0.5 0 0,1 -0.5,-0.5 V35.5 a0.5,0.5 0 0,1 0.5,-0.5 z M67.5,32 a3.5,3.5 0 1,0 7.0,0 a3.5,3.5 0 1,0 -7.0,0 z" />
+</vector>

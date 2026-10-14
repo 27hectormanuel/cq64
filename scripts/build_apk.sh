@@ -52,7 +52,7 @@ cp -r "$DECOMP/AndroidManifest.xml" "$DECOMP/apktool.yml" "$DECOMP/res" "$DECOMP
 cp "$HERE/java_patch/HostLoader.smali" "$STAGE/smali/com/doublefine/cq/"
 # Adaptive launcher icon made from the game's own icon (both variants; see the XML for details).
 mkdir -p "$STAGE/res/drawable" "$STAGE/res/drawable-anydpi-v26"
-cp "$HERE/java_patch/res/drawable/cq_launcher.xml" "$STAGE/res/drawable/"
+cp "$HERE/java_patch/res/drawable/cq_launcher.xml" "$HERE/java_patch/res/drawable/cq_launcher_mono.xml" "$STAGE/res/drawable/"
 cp "$HERE/java_patch/res/drawable-anydpi-v26/cq_launcher.xml" "$STAGE/res/drawable-anydpi-v26/"
 # ICON=<png/jpg/webp>: a higher-resolution square picture for the adaptive icon (e.g. the game's
 # 1024 px store icon) instead of the APK's 144 px one.
