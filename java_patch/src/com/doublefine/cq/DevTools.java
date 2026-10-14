@@ -569,6 +569,7 @@ public final class DevTools {
             "Debug command line…",
             "Frame rate cap: " + capText,
             "Resolution: " + RES_LABELS[resIndex()],
+            "High frame rate: " + simRateLabel(simRate()),
         };
         dialog().setTitle("Costume Quest dev tools")
                 .setItems(items, (d, which) -> {
@@ -579,8 +580,10 @@ public final class DevTools {
                         showConsole();
                     } else if (which == 2) {
                         showCapPicker();
-                    } else {
+                    } else if (which == 3) {
                         showResPicker();
+                    } else {
+                        showSimRatePicker();
                     }
                 })
                 .setNegativeButton("Close", null)
@@ -624,9 +627,63 @@ public final class DevTools {
     }
 
     /** The resolution cap is applied once at startup, so changing it needs a relaunch. */
+    // ---------------------------------------------------------------- simulation rate
+
+    // The game world (movement, animation, battles) advances in fixed simulation ticks, 30 a
+    // second, however fast frames are drawn. libcqhost (simrate.cpp) can run it at 60 or 120 Hz,
+    // as Costume Quest 2's "60 FPS" option does; files/simrate holds the rate, read at startup.
+    private static final int[] SIM_RATES = {30, 60, 120};
+
+    private static int simRate() {
+        try (java.io.BufferedReader r = new java.io.BufferedReader(
+                new java.io.FileReader(new java.io.File(sActivity.getFilesDir(), "simrate")))) {
+            int hz = Integer.parseInt(r.readLine().trim());
+            return hz == 60 || hz == 120 ? hz : 30;
+        } catch (Exception e) {
+            return 30;
+        }
+    }
+
+    private static String simRateLabel(int hz) {
+        switch (hz) {
+            case 60: return "60 fps (like Costume Quest 2)";
+            case 120: return "120 fps (experimental)";
+            default: return "OFF (30 fps, original)";
+        }
+    }
+
+    private static void showSimRatePicker() {
+        int cur = simRate();
+        String[] labels = new String[SIM_RATES.length];
+        int checked = 0;
+        for (int i = 0; i < SIM_RATES.length; i++) {
+            labels[i] = simRateLabel(SIM_RATES[i]);
+            if (SIM_RATES[i] == cur) checked = i;
+        }
+        dialog().setTitle("High frame rate (world, battles)")
+                .setSingleChoiceItems(labels, checked, (d, which) -> {
+                    d.dismiss();
+                    int hz = SIM_RATES[which];
+                    if (hz == cur) return;
+                    java.io.File f = new java.io.File(sActivity.getFilesDir(), "simrate");
+                    if (hz == 30) {
+                        f.delete();
+                    } else {
+                        try (java.io.FileWriter w = new java.io.FileWriter(f)) {
+                            w.write(hz + "\n");
+                        } catch (java.io.IOException e) {
+                            return;
+                        }
+                    }
+                    showRestartPrompt();
+                })
+                .setNegativeButton("Cancel", null)
+                .show();
+    }
+
     private static void showRestartPrompt() {
         dialog().setTitle("Restart required")
-                .setMessage("The resolution change takes effect the next time the game starts. "
+                .setMessage("The change takes effect the next time the game starts. "
                         + "Unsaved progress is lost when restarting now.")
                 .setPositiveButton("Restart now", (d, w) -> restart())
                 .setNegativeButton("Later", null)
