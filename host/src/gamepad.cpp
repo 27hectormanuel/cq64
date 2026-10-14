@@ -301,21 +301,57 @@ u32 t_handle_input(u32 vpad) {
 // datapatch adds the Xbox icons to Mobile_InputIcons.gfx, the library every menu imports its
 // button icons from, with their images renamed "X360_*". Images resolve to textures named
 // "UI/Flash/<library>/<image>"; the X360 ones are mapped to Xbox360_ControllerIcons' textures, or
-// to PS3_ControllerIcons' (same names, except the Xbox A icon's "BUTTON_Aorig") while the
-// controller in use is a PlayStation one (DevTools.nativePadIcons). Screens built before a switch
-// keep the icons they loaded.
+// to PS3_ControllerIcons' while the controller in use is a PlayStation one
+// (DevTools.nativePadIcons). A few movies carry private copies of Xbox icons (the message box's
+// A/B, the pause screen's stick icons); those are redirected to the PS3 ones too. Screens built
+// before a switch keep the icons they loaded.
 
 std::atomic<int> g_icon_set{0};  // 0: Xbox, 1: PlayStation
 
 bool starts_with_ci(const char *s, const char *prefix) { return strncasecmp(s, prefix, strlen(prefix)) == 0; }
 
-// Texture path for an "X360_" image name (without the prefix) in the current icon set.
+// Xbox icon textures (in Xbox360_ControllerIcons unless a folder is given) whose PS3 equivalent
+// has another name. The unnamed ones are the stick icons, matched by picture: R, L, then each
+// stick pushed in a direction.
+constexpr struct { const char *xbox, *ps3; } PS3_NAMES[] = {
+    {"BUTTON_Aorig", "BUTTON_A"},
+    {"MessageBox/MessageBox_IA", "BUTTON_A"},
+    {"MessageBox/MessageBox_I7", "BUTTON_B"},
+    {"xbox360_controllericons_I16", "PS3_ControllerIcons_I14"},  // R
+    {"xbox360_controllericons_I17", "PS3_ControllerIcons_I15"},  // L
+    {"xbox360_controllericons_I18", "PS3_ControllerIcons_I16"},  // R up
+    {"xbox360_controllericons_I19", "PS3_ControllerIcons_I17"},  // R down
+    {"xbox360_controllericons_I1A", "PS3_ControllerIcons_I19"},  // L down
+    {"xbox360_controllericons_I1B", "PS3_ControllerIcons_I18"},  // L up
+    {"xbox360_controllericons_I1C", "PS3_ControllerIcons_I1B"},  // R right
+    {"xbox360_controllericons_I1D", "PS3_ControllerIcons_I1C"},  // R left
+    {"xbox360_controllericons_I1E", "PS3_ControllerIcons_I1A"},  // L right
+    {"xbox360_controllericons_I1F", "PS3_ControllerIcons_I1D"},  // L left
+    {"Pause/Pause_I2B", "PS3_ControllerIcons_I16"},
+    {"Pause/Pause_I34", "PS3_ControllerIcons_I17"},
+    {"Pause/Pause_I49", "PS3_ControllerIcons_I19"},
+    {"Pause/Pause_I40", "PS3_ControllerIcons_I18"},
+    {"Pause/Pause_I2E", "PS3_ControllerIcons_I1B"},
+    {"Pause/Pause_I31", "PS3_ControllerIcons_I1C"},
+    {"Pause/Pause_I43", "PS3_ControllerIcons_I1A"},
+    {"Pause/Pause_I46", "PS3_ControllerIcons_I1D"},
+};
+
+// The PS3 texture for an Xbox icon file name ("BUTTON_Y.dds", or "<folder>/<file>" for the
+// private copies), or "" if it has none.
+std::string ps3_texture(const char *name) {
+    const char *ext = strrchr(name, '.');
+    size_t len = ext ? ext - name : strlen(name);
+    for (const auto &m : PS3_NAMES)
+        if (strlen(m.xbox) == len && strncasecmp(name, m.xbox, len) == 0)
+            return std::string("UI/Flash/PS3_ControllerIcons/") + m.ps3 + (ext ? ext : "");
+    return strchr(name, '/') ? "" : std::string("UI/Flash/PS3_ControllerIcons/") + name;
+}
+
+// Texture path for an "X360_" image file name (without the prefix, e.g. "BUTTON_Aorig.dds") in
+// the current icon set.
 std::string icon_texture(const char *name) {
-    if (g_icon_set.load(std::memory_order_relaxed) == 1) {
-        std::string n = name;
-        if (strcasecmp(name, "BUTTON_Aorig") == 0) n = "BUTTON_A";
-        return "UI/Flash/PS3_ControllerIcons/" + n;
-    }
+    if (g_icon_set.load(std::memory_order_relaxed) == 1) return ps3_texture(name);
     return std::string("UI/Flash/Xbox360_ControllerIcons/") + name;
 }
 
@@ -324,8 +360,10 @@ u32 t_bind_texture(u32 path, u32 flag) {
     const char *p = (const char *)g2h(path);
     if (p && starts_with_ci(p, "UI/Flash/")) {
         const char *slash = strchr(p + 9, '/');
-        if (slash && starts_with_ci(slash + 1, "X360_")) {
-            std::string mapped = icon_texture(slash + 6);
+        std::string mapped;
+        if (slash && starts_with_ci(slash + 1, "X360_")) mapped = icon_texture(slash + 6);
+        else if (slash && g_icon_set.load(std::memory_order_relaxed) == 1) mapped = ps3_texture(p + 9);
+        if (!mapped.empty()) {
             static std::unordered_map<std::string, u32> cache;  // guest copies of mapped paths
             u32 &g = cache[mapped];
             if (!g) {
