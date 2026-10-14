@@ -55,6 +55,7 @@ public final class DevTools {
     static native float nativeFps();
     static native void nativeSetFrameCap(int fps);
     static native void nativePad(int buttons, int lx, int ly, int rx, int ry, int lt, int rt);
+    static native void nativePadIcons(int set);  // button icons: 0 Xbox, 1 PlayStation
 
     private static final String[] CAP_LABELS = {"Auto (Game Mode)", "Uncapped", "60 fps", "30 fps"};
     private static final int[] CAP_VALUES = {-1, 0, 60, 30};
@@ -206,11 +207,38 @@ public final class DevTools {
     }
 
     private static void reportControllers() {
-        boolean any = false;
-        for (int id : InputDevice.getDeviceIds()) any |= isController(InputDevice.getDevice(id));
+        InputDevice first = null, last = null;
+        for (int id : InputDevice.getDeviceIds()) {
+            InputDevice d = InputDevice.getDevice(id);
+            if (!isController(d)) continue;
+            if (first == null) first = d;
+            if (id == sLastPadId) last = d;
+        }
+        boolean any = first != null;
         if (sPadReported == null || sPadReported != any) {
             sPadReported = any;
             nativeCommand("_cqPad = " + any);
+        }
+        if (any) reportIcons(last != null ? last : first);
+    }
+
+    // Button icons follow the controller last used (or the first connected one): PlayStation icons
+    // for Sony controllers (DualShock 3/4, DualSense), Xbox icons for everything else.
+    private static final int VENDOR_SONY = 0x054c;
+    private static int sLastPadId = -1, sIconsReported = -1;
+
+    private static void reportIcons(InputDevice d) {
+        int set = d.getVendorId() == VENDOR_SONY ? 1 : 0;
+        if (set != sIconsReported) {
+            sIconsReported = set;
+            nativePadIcons(set);
+        }
+    }
+
+    private static void padUsed(InputDevice d) {
+        if (d.getId() != sLastPadId) {
+            sLastPadId = d.getId();
+            reportIcons(d);
         }
     }
 
@@ -245,6 +273,7 @@ public final class DevTools {
     /** Called for every key event; returns true for controller input, which the game must not see as keys. */
     public static boolean onKey(KeyEvent ev) {
         if (!isController(ev.getDevice())) return false;
+        padUsed(ev.getDevice());
         int code = ev.getKeyCode();
         boolean down = ev.getAction() == KeyEvent.ACTION_DOWN;
         if (ev.getAction() != KeyEvent.ACTION_DOWN && ev.getAction() != KeyEvent.ACTION_UP) return false;
@@ -268,6 +297,7 @@ public final class DevTools {
             return false;
         }
         InputDevice d = ev.getDevice();
+        padUsed(d);
         sLx = ev.getAxisValue(MotionEvent.AXIS_X);
         sLy = ev.getAxisValue(MotionEvent.AXIS_Y);
         boolean zrz = d.getMotionRange(MotionEvent.AXIS_Z, ev.getSource()) != null;  // most pads; some use RX/RY
