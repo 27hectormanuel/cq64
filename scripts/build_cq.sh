@@ -47,7 +47,7 @@ if [ -z "$VARIANT" ]; then
 fi
 [ ${#ABIS[@]} -eq 0 ] && ABIS=(arm64-v8a x86_64)
 
-[ -f "$TP/apktool.jar" ] && [ -d "$TP/dynarmic" ] && [ -d "$TP/boost/boost" ] || "$HERE/fetch_deps.sh"
+"$HERE/fetch_deps.sh"  # quick when present; also applies new patches/ to an existing dynarmic
 "$HERE/decompile.sh" "$APK"
 if [ "$SPLIT" = 1 ]; then
     VARIANT=$VARIANT SPLIT=1 "$HERE/build_apk.sh" "${ABIS[@]}"
