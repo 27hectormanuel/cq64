@@ -37,7 +37,7 @@ What the tests showed beyond the research:
 | Binary | Size | MD5 | SHA-256 | Notes |
 |---|---|---|---|---|
 | `Cq.exe` (Windows) | 7,294,464 | `d9919c991cafb27ec1e758d68094d622` | `9d5acea0f5da7686e1c2135de00ece8544fc6e3d7cc5c345538963fee3addef8` | PE32 i386, MSVC 2008 (`MSVCR90`), FileVersion 1.0.0.11, stripped, Direct3D 9 |
-| `Cq.exe` (Windows, Steam, Jan 2026) | 7,289,344 | `6f739759617989691663f9273e72c969` | `d9e1ee3e7e78ae80b85f51b941b4d27beb7a205312507452cc8718aeb2bb46cf` | Same code, rebuilt: functions moved by +0x420, globals by −0x1900 (table below). No SteamStub wrapper. Imports `XINPUT1_3.dll` instead of `XINPUT9_1_0.dll` |
+| `Cq.exe` (Windows, Steam) | 7,289,344 | `6f739759617989691663f9273e72c969` | `d9e1ee3e7e78ae80b85f51b941b4d27beb7a205312507452cc8718aeb2bb46cf` | Linked 2012-06-14, **older** than 1.0.0.11 (2012-10-31), same FileVersion. Steamworks built in, no SteamStub wrapper. Functions at +0x420, globals at −0x1900 (§4). Imports `XINPUT1_3.dll` by ordinal |
 | `Cq.bin.x86` (Linux, GOG 2.0.0.3) | 21,868,972 | `dbca5c51b7584e5dfd430a86c166fab9` | `7104dc7db2e5a9bc30cfebbacb34656072a8aed4d5b86515208ba93e3d5100ef` | ELF i386, GCC, **not stripped** (59,823 symbols), SDL2 + desktop OpenGL, bundled FMOD 4.42.16 |
 | `libCq.so` (Android 1.1.7) | 12,907,304 | `52e0a8bd49fa2602dd9bdfe24df47020` | | ARM32, symbols exported |
 
@@ -186,8 +186,9 @@ own console can do the rest.
 `luaapp_ToggleConsoleSpam 0x565b50`, `luaapp_IsConsoleSpamEnabled 0x565b70`, console creation
 `0x564ce0` (0x98-byte object) and destruction around `0x5610ca`.
 
-**Steam build (Jan 2026).** Found by matching the 1.0.0.11 functions byte for byte, with
-absolute addresses masked out. The console object's layout didn't change.
+**Steam build.** Found by matching the 1.0.0.11 functions byte for byte, with absolute
+addresses masked out. The console object's layout didn't change. See [§6](#6-releases-compared-retail-disc-gog-and-steam)
+for how this build differs.
 
 | What | 1.0.0.11 | Steam |
 |---|---|---|
@@ -197,7 +198,9 @@ absolute addresses masked out. The console object's layout didn't change.
 | `QueueCommand` | `0x564f00` | `0x565320` |
 | `luaapp_ToggleConsoleSpam` | `0x565b50` | `0x565f70` |
 
-The DLL checks the bytes of both builds and uses whichever matches.
+The DLL checks the bytes of both builds and uses whichever matches. The Steam build imports
+`XINPUT1_3.dll` **by ordinal only** (2 `XInputGetState`, 3 `XInputSetState`, 4
+`XInputGetCapabilities`), so the controller hook has to match the ordinal, not the name.
 
 **First test:** with the DLL, set `console+0x10 = 1` and type nothing. If the D3D font exists,
 `> _` appears at the bottom of the screen. That one byte tells whether the original console UI
@@ -250,7 +253,56 @@ Other notes: the command line only takes `-width -height -fullscreen -window -sy
 -novsync -ssaa2x -ssaa4x` (`DFApp::ProcessCommandLine`); no console switch. `DFCONFIG` is empty
 in both PC releases.
 
-## 6. Open questions
+## 6. Releases compared: retail disc, GOG and Steam
+
+Checked on 2026-10-15 against a 2014 retail PC disc image (ISO 9660 with Joliet and Rock Ridge
+views: a Windows Inno Setup 5.5 `setup.exe` and a Linux MojoSetup installer
+`CostumeQuest-Linux-2013-06-04-setup-bin`), the GOG Linux release and the Steam install.
+
+| Release | Game binary | Console support |
+|---|---|---|
+| Disc, Windows | `Cq.exe` 1.0.0.11 (`9d5acea0…`), internal name `Cq_NoSteam.exe`, linked 2012-10-31. The installer lists it twice (`cq.exe`, then `Cq.exe`); both are the same file | `dinput8.dll` |
+| Disc, Linux | `Cq.bin.x86` `7104dc7d…`, identical to GOG 2.0.0.3; all 73 game files match GOG in name, size and content | `cqconsole.so` |
+| Steam (app 115100) | `Cq.exe` `d9e1ee3e…`, linked 2012-06-14, with Steamworks (`steam_api.dll`, achievements and stats) | `dinput8.dll` (second address set) |
+
+So the disc adds no new build; the Steam one is the odd one out. Data differences:
+
+| File | Disc (Win + Linux), GOG | Steam |
+|---|---|---|
+| `Data/Config/hotkeys.lua` | present | missing |
+| `Packs/Man_Tests.~h` / `.~p` | present | missing |
+| `Data/Config/*` (others) | Windows files identical to Steam's. Linux ones differ only in platform switches (`BuddhaDefault.cfg` adds `'OS X'` and `'LINUX'`) | |
+
+**`hotkeys.lua` is dead data**, left over from Brütal Legend, Double Fine's earlier game on the
+same engine. It maps F-keys and Ctrl/Alt/Shift + key to Lua commands (`!` = run locally, `*` = on
+all network nodes): summoning Brütal Legend squads and Deuce, `game.Azrael`, debug camera, flying,
+render toggles. `BuddhaDefault.cfg` still sets `hotkeysFile = "Data/Config/hotkeys.lua"`, and
+`SeedApp::ReadBuddhaCfg` (Linux `0x8423530`) copies it into `SeedApp+0x224`, but nothing reads
+that field afterwards, and no build has the code that parses the `Ctrl_`/`Alt_`/`Shift_` names.
+Copying the file into a Steam install changes nothing.
+
+Of its 72 Lua functions, only these exist in the retail builds, so they can be typed into the
+console:
+
+| Function | Windows (both) | Linux |
+|---|---|---|
+| `app.DoTogglePause`, `app.ToggleDebugUI`, `app.ToggleWorldRendering` | yes | yes |
+| `cutscenes.SkipAllCutscenes`, `debug.Summon`, `debug.GetPlayer`, `game.GetTeamType` | yes | yes |
+| `sound.Mute` / `IsMuted`, `music.Mute` / `IsMuted` | yes | no |
+
+(Checked by name in the binaries' strings, so "yes" means the name is there, not that the call
+was tested.)
+
+**`Man_Tests`** holds Double Fine's automated test scripts under `data/test/`: the test
+framework (`testbase.lua`, `utils/testsystem.lua`), RoBert bot bases (`robertbase.lua`,
+`costumequestbotbase.lua`), bots that walk, bob and mash buttons (`bot/walking.lua`,
+`bot/mashing.lua`, `bot/costumequestinfinite.lua`), mission run-throughs
+(`bot/missions/l_010_intro.lua` … `l_030_escapewitch.lua`, `mall_mq_03/05`), summon tests and a
+suburbs travel script, 33 files in all. The Linux binary still has `__dummy_testSetRoBertRunning`
+and `__dummy_testSetInputStreamType`. Whether these scripts can still be loaded and run from the
+console on the disc/GOG builds is untested (see §7).
+
+## 7. Open questions
 
 - ~~Does `Cq.exe` create the console font?~~ Yes (tested).
 - ~~DirectInput too?~~ Yes: the game creates a DirectInput keyboard; the proxy blanks it while the
@@ -261,6 +313,9 @@ in both PC releases.
 - Whether Linux `QueueCommand` from `HandleInput` behaves the same as `ExecuteCommand(-1)` in
   single player. It should: it only builds a network command while a game session is recording or
   playing back.
+- Can the `Man_Tests` scripts (§6) be loaded and run from the console on the disc/GOG builds, for
+  example the RoBert mission bots?
+- LB + RB + A on the Steam `Cq.exe` (XInput hooked by ordinal) hasn't been tested in the game yet.
 
 ## Tools
 
