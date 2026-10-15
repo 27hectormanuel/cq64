@@ -13,7 +13,7 @@ Double Fine's engine has a full Lua developer console and an on-screen debug men
 |---|---|
 | Console typing | `Console::HandleInput` is `mov r0, #0; bx lr` — key presses never reach the console |
 | Debug menu | `GameApp::ShowDebugMenu` is a single `bx lr` |
-| Console text drawing | removed, nothing appears on screen |
+| Console text drawing | `Console::RequestRender` is still there and runs every frame, but the font it draws with is never made (`FontManager::MakeFont` returns null, `FontManager::RenderText` is a stub), so nothing appears |
 
 The part that executes code survived: `Console::ExecuteCommand(const String&, int playerIndex)`
 still compiles and runs a Lua string in the game's console environment, and the global
@@ -147,3 +147,5 @@ If the guest crashes, the register dump and the guest backtrace are also appende
   is not freed.
 - Some commands left over from the developers' menu crash the retail build — for example
   `cq.dbgStartBattleDefault()`. `pcall` catches Lua errors, not native crashes.
+
+For the official Windows and Linux releases, see [debug-console-pc.md](debug-console-pc.md).
