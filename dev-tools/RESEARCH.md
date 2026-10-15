@@ -1,6 +1,6 @@
 # The debug console on PC
 
-How to bring Costume Quest's Lua developer console (see [debug-console.md](debug-console.md) for
+How to bring Costume Quest's Lua developer console (see [debug-console.md](../docs/debug-console.md) for
 how CQ64 revives it on Android) to three more places:
 
 1. **Costume Quest Mobile for Windows** (this branch), which runs the Android `libCq.so`;
@@ -14,9 +14,9 @@ through a GhidraMCP server, see [Tools](#tools)). No game files are in this repo
 
 | Where | What | Code | Tested |
 |---|---|---|---|
-| Costume Quest Mobile for Windows | Console drawn over the game: F1 or `` ` ``, Tab completion from the game's Lua, history, scrollback | `host/src/win/console_win.cpp` (see [windows.md](windows.md)) | Both variants under Proton: title screen and in the world; the game draws normally after it closes |
-| Official Windows (`Cq.exe`) | `dinput8.dll` proxy: the game's **own** console comes back (its font, its prompt, its red errors) | [`pc-console/windows`](../pc-console/README.md) | Under Proton 11: opens, typing, Enter runs commands (`> 3`, errors in red), history. Not tested: blocking a **real** keyboard from the game while the console is open (see below) |
-| Official Linux (GOG `Cq.bin.x86`) | `LD_PRELOAD` library: typing and drawing in the game's style, over the game | [`pc-console/linux`](../pc-console/README.md) | Natively with the Steam runtime: title screen, history, `~=`, and in the world (`game.AddCandyAmount(100)` → the candy counter shows 100) |
+| Costume Quest Mobile for Windows | Console drawn over the game: F1 or `` ` ``, Tab completion from the game's Lua, history, scrollback | `host/src/win/console_win.cpp` (see [windows.md](../docs/windows.md)) | Both variants under Proton: title screen and in the world; the game draws normally after it closes |
+| Official Windows (`Cq.exe`) | `dinput8.dll` proxy: the game's **own** console comes back (its font, its prompt, its red errors) | [`windows/`](HOWTO.md) | Under Proton 11: opens, typing, Enter runs commands (`> 3`, errors in red), history. Not tested: blocking a **real** keyboard from the game while the console is open (see below) |
+| Official Linux (GOG `Cq.bin.x86`) | `LD_PRELOAD` library: typing and drawing in the game's style, over the game | [`linux/`](HOWTO.md) | Natively with the Steam runtime: title screen, history, `~=`, and in the world (`game.AddCandyAmount(100)` → the candy counter shows 100) |
 
 What the tests showed beyond the research:
 

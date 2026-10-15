@@ -178,4 +178,4 @@ If the guest crashes, the register dump and the guest backtrace are also appende
   `cq.dbgStartBattleDefault()`. `pcall` catches Lua errors, not native crashes.
 
 For the official Windows and Linux releases (and the Windows build of CQ64), see
-[debug-console-pc.md](debug-console-pc.md).
+[dev-tools/RESEARCH.md](../dev-tools/RESEARCH.md).
