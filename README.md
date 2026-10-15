@@ -146,6 +146,10 @@ adb install -r --no-incremental out/costumequest64.apk
   variants run on an x86_64 emulator image (tested on API 36).
 - Developed against an APK that contains the data pack as `assets/ant.mp3`; APKs that ship it as
   a separate OBB expansion file are untested.
+- Costume Quest was sold as four GPU-specific APKs (Adreno, Mali, PowerVR, Tegra) with the same
+  code and different data packs, mainly their texture formats. The Mali one has uncompressed
+  textures, so it should run on any phone (tested on a Pixel 8 Pro). Details, checksums and how
+  the game picks a texture format: [docs/apk-variants.md](docs/apk-variants.md).
 
 ### Middle Manager of Justice (experimental)
 
