@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: CC0-1.0
 // Windows build: the debug command line in the game window (Android has the Java DevTools dialog
-// instead). ` or F1 opens it over the game; commands go to devtools::submit, like the Android
+// instead). ` or F1 (or LB + RB + A on a controller) opens it over the game; commands go to devtools::submit, like the Android
 // console's Run button, and the output is devtools' own buffer. Keys reach it on the main thread
 // (handle_event); it is drawn on the game's GL thread just before each swap (draw), with its own
 // small GLES 2 program and a font atlas rendered once with GDI. The GL state it touches is saved
@@ -218,6 +218,11 @@ void wrap_into(const std::string &text, size_t width, std::vector<std::string> &
     }
 }
 }  // namespace
+
+void toggle() {
+    std::lock_guard<std::mutex> lk(g_lock);
+    set_open(!g_open);
+}
 
 bool is_open() {
     std::lock_guard<std::mutex> lk(g_lock);

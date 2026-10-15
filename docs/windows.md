@@ -26,7 +26,7 @@ pthread, GL and JNI bridges — packaged as a desktop program:
   `CQ64_GL_STATS=1` logs the texture formats the game uploads.
 - Input: the mouse acts as touch, keys as Android key codes, controllers go to the virtual pad
   (optimized variant). Lightly tested.
-- **Debug console**: F1 or `` ` `` opens the game's Lua command line over the game (both variants;
+- **Debug console**: F1, `` ` `` or LB + RB + A on a controller opens the game's Lua command line over the game (both variants;
   `host/src/win/console_win.cpp`). Enter runs a line, Tab completes from every function the game's
   Lua exposes, Up/Down is history, PgUp/PgDn scrolls, Ctrl+V pastes, Ctrl+L clears, Escape closes.
   Output is the same as the Android console's (`cq64-data/files/console.out` too). The Android

@@ -5,9 +5,12 @@ what each build kept: [RESEARCH.md](RESEARCH.md). No game files are here; bring 
 
 | Build | Get it | Open the console |
 |---|---|---|
-| **Costume Quest Mobile for Windows** (this repo, runs the Android game) | Release *Dev Console testing*: `CostumeQuestMobile-optimized.zip` or `-original.zip` | F1 or `` ` `` |
-| **Official Windows** `Cq.exe` 1.0.0.11 (SHA-256 `9d5acea0…addef8`) | Release: `dinput8.dll` | F1 or `` ` `` |
-| **Official Linux** GOG 2.0.0.3 `Cq.bin.x86` (SHA-256 `7104dc7d…5100ef`) | Release: `cqconsole-linux.zip` | F1 or `` ` `` |
+| **Costume Quest Mobile for Windows** (this repo, runs the Android game) | Release *Dev Console testing*: `CostumeQuestMobile-optimized.zip` or `-original.zip` | F1, `` ` `` or LB + RB + A |
+| **Official Windows** `Cq.exe` 1.0.0.11 (SHA-256 `9d5acea0…addef8`) | Release: `dinput8.dll` | F1, `` ` `` or LB + RB + A |
+| **Official Linux** GOG 2.0.0.3 `Cq.bin.x86` (SHA-256 `7104dc7d…5100ef`) | Release: `cqconsole-linux.zip` | F1, `` ` `` or LB + RB + A |
+
+With a controller only (Steam Deck), open the console with LB + RB + A, then type on the on-screen
+keyboard (Steam + X).
 
 The official-game files check the game's code at start and do nothing on any other version (the
 game then runs as usual).
@@ -16,7 +19,7 @@ game then runs as usual).
 
 | Key | |
 |---|---|
-| F1 or `` ` `` | open / close |
+| F1 or `` ` ``, or **LB + RB + A** on a controller | open / close (A doesn't reach the game while LB and RB are held) |
 | Enter | run the line |
 | Up / Down | history |
 | Left / Right, Home / End, Backspace / Delete | edit |
@@ -37,7 +40,8 @@ Unzip, drag your Costume Quest APK onto `Costume Quest Mobile.exe` (see
 Its output also goes to `cq64-data/files/console.out`.
 
 To send commands without the keyboard, write a file `cq64-data/files/console` (one Lua line per
-line); `cq64-data/files/input` takes `sdlkey F1`, `type <text>` and `sdlkey Return`. A file
+line); `cq64-data/files/input` takes `sdlkey F1`, `type <text>`, `sdlkey Return` and
+`pad lb+rb+a`. A file
 `cq64-data/files/screenshot` saves the next frame as `screenshot.bmp`.
 
 ## Official Windows release (`Cq.exe`)
@@ -53,8 +57,8 @@ To remove it, delete `dinput8.dll`.
 Files in the game folder:
 - `cqconsole.log`: what was run and each new console line.
 - `cqconsole-commands.txt`: Lua lines to run.
-- `cqconsole-keys.txt`: test keys, as `key <virtual-key code>`, `text <characters>` or
-  `input <virtual-key code>`.
+- `cqconsole-keys.txt`: test keys, as `key <virtual-key code>`, `text <characters>`,
+  `input <virtual-key code>` or `pad lb+rb+a [ms]`.
 - `cqconsole-shot`: saves the next frame as `cqconsole-shot.bmp`.
 
 ## Official Linux release (GOG)
@@ -68,7 +72,7 @@ game needs `libGLU` and few systems have it for i386. The console is drawn over 
 original style, because the Linux build has no console font of its own.
 
 Files go in `$CQCONSOLE_DIR` (default: the game folder): the same `cqconsole.log`, `-commands.txt`,
-`-keys.txt` (`key <SDL key name>` such as `key Return`, or `text <characters>`) and `-shot` as
+`-keys.txt` (`key <SDL key name>` such as `key Return`, `text <characters>` or `pad lb+rb+a [ms]`) and `-shot` as
 on Windows.
 
 **Saves:** the game saves to `$XDG_DATA_HOME/doublefine/costumequest` (normally
@@ -99,6 +103,10 @@ On Windows the game's main thread is named "Buddha Main", so stop it with
 
 ## Known limits
 
+- LB + RB + A was tested in Costume Quest Mobile and in `Cq.exe` under Proton (test buttons through
+  the same hooks). On Linux the code is in place (`SDL_GameControllerGetButton` is wrapped), but it
+  is untested: started outside Steam on a Steam Deck, the game's own SDL 2.0.0 sees no
+  controller at all. The log says `controller ... polled by the game` once it sees one.
 - **Not yet tested:** that a **real** keyboard is kept away from `Cq.exe`'s menus while the console
   is open. The game also reads DirectInput, which the DLL blanks while the console is open.
 - Commands run as typed: some of the developers' leftover commands crash the retail game.

@@ -5,7 +5,8 @@
 // The retail game kept its Lua console (Console::ExecuteCommand, which also prints results and
 // errors into the console's line list), but stubbed out the typing (Console::HandleInput) and the
 // drawing (Console::RequestRender, and the platform font). This library adds both back:
-//   ` or F1        open / close        Enter       run the line with the game's ExecuteCommand
+//   ` or F1        open / close (also LB + RB + A on a controller)
+//   Enter          run the line with the game's ExecuteCommand
 //   Up / Down      history             Escape      close
 // Keys: SDL_PollEvent is wrapped; the game calls it from its main loop (DFApp::PlatformLoop), so
 // commands run on the game thread, between frames. While the console is open, keyboard events
@@ -15,7 +16,8 @@
 // Files in $CQCONSOLE_DIR (default: the current directory), checked every 200 ms on the game thread:
 //   cqconsole-commands.txt   Lua lines, run in turn
 //   cqconsole-keys.txt       lines "key <SDL key name>" (Return, F1, Up, ...) or "text <characters>",
-//                            pushed as SDL key events (the console's own path)
+//                            pushed as SDL key events (the console's own path), or
+//                            "pad lb+rb+a [ms]" (controller buttons, as the game polls them)
 //   cqconsole-shot           saves the next frame as cqconsole-shot.bmp
 // Each new console line is also printed to stdout and cqconsole.log.
 //
@@ -85,6 +87,8 @@ static uint32_t (*sdl_ticks)(void);
 static int32_t (*sdl_key_from_name)(const char *);
 static int32_t (*sdl_scancode_from_key)(int32_t);
 static void (*sdl_drawable_size)(void *, int *, int *);
+static uint8_t (*sdl_pad_button)(void *, int);
+enum { PAD_A = 0, PAD_B = 1, PAD_X = 2, PAD_Y = 3, PAD_BACK = 4, PAD_START = 6, PAD_LB = 9, PAD_RB = 10 };
 
 // ---- desktop GL (the parts used) -------------------------------------------------------------------
 typedef unsigned int GLenum, GLuint;
@@ -194,6 +198,7 @@ static int g_len, g_cursor;
 static char g_history[32][512];
 static int g_hist_n, g_hist_pos = -1;
 static volatile int g_shot;
+static volatile uint32_t g_test_pad, g_test_pad_until;  // test buttons ("pad lb+rb+a 300"), every controller
 
 static void lock(void) { while (__atomic_exchange_n(&g_spin, 1, __ATOMIC_ACQUIRE)) {} }
 static void unlock(void) { __atomic_store_n(&g_spin, 0, __ATOMIC_RELEASE); }
@@ -372,6 +377,20 @@ static void poll_files(void) {
             if (!strncmp(l, "key ", 4)) {
                 int32_t k = sdl_key_from_name(l + 4);
                 if (k) push_key(k, 0);
+            } else if (!strncmp(l, "pad ", 4)) {  // "pad lb+rb+a [ms]": controller buttons, held that long
+                char names[64] = "";
+                int ms = 300;
+                sscanf(l + 4, "%63s %d", names, &ms);
+                uint32_t mask = 0;
+                for (char *t = names; *t;) {
+                    size_t n = strcspn(t, "+");
+                    static const char *const k[] = {"a", "b", "x", "y", "back", "guide", "start", "ls", "rs", "lb", "rb"};
+                    for (int i = 0; i < 11; i++)
+                        if (strlen(k[i]) == n && !strncmp(t, k[i], n)) mask |= 1u << i;
+                    t += n + (t[n] == '+');
+                }
+                g_test_pad_until = sdl_ticks() + ms;
+                g_test_pad = mask;
             } else if (!strncmp(l, "text ", 5)) {
                 for (const char *p = l + 5; *p; p++) {
                     int32_t sym = *p;
@@ -434,6 +453,35 @@ static void log_new_lines(void) {
     }
     for (int i = 0; i < n; i++) strcpy(seen[i], now[i].text);
     seen_n = n;
+}
+
+// LB + RB + A on a controller: open / close. The game polls its buttons with this, so A is hidden
+// from it while both shoulders are held.
+static uint8_t pad_button(void *gc, int b) {
+    uint8_t v = sdl_pad_button(gc, b);
+    if (g_test_pad && (int32_t)(sdl_ticks() - g_test_pad_until) < 0 && (g_test_pad >> b & 1)) v = 1;
+    return v;
+}
+
+uint8_t SDL_GameControllerGetButton(void *gc, int button) {
+    if (!g_ok) return sdl_pad_button(gc, button);
+    static void *seen;
+    if (gc != seen) logf("controller %p polled by the game", (seen = gc));
+    if (button != PAD_A) return pad_button(gc, button);
+    static void *held_gc;
+    int both = pad_button(gc, PAD_LB) && pad_button(gc, PAD_RB), a = pad_button(gc, PAD_A);
+    if (!both) {
+        if (held_gc == gc) held_gc = 0;
+        return a;
+    }
+    if (a && held_gc != gc) {
+        held_gc = gc;
+        logf("LB + RB + A");
+        set_open(!g_open);
+    } else if (!a && held_gc == gc) {
+        held_gc = 0;
+    }
+    return 0;
 }
 
 int SDL_PollEvent(SDL_Event *e) {
@@ -619,7 +667,8 @@ static void *gl_proc(const char *name) {
 __attribute__((constructor)) static void init(void) {
     sdl_poll = (int (*)(SDL_Event *))dlsym(RTLD_NEXT, "SDL_PollEvent");
     sdl_swap = (void (*)(void *))dlsym(RTLD_NEXT, "SDL_GL_SwapWindow");
-    if (!sdl_poll || !sdl_swap) return;  // not a program that uses SDL2: stay out of the way
+    sdl_pad_button = (uint8_t(*)(void *, int))dlsym(RTLD_NEXT, "SDL_GameControllerGetButton");
+    if (!sdl_poll || !sdl_swap || !sdl_pad_button) return;  // not a program that uses SDL2: stay out of the way
     char exe[512] = "";
     long n = readlink("/proc/self/exe", exe, sizeof exe - 1);
     if (n <= 0) return;
@@ -648,7 +697,7 @@ __attribute__((constructor)) static void init(void) {
     GL(BlendFunc), GL(Begin), GL(End), GL(Vertex2f), GL(TexCoord2f), GL(Color4f), GL(GenTextures);
     GL(BindTexture), GL(TexImage2D), GL(TexParameteri), GL(Viewport), GL(PixelStorei), GL(UseProgram);
     GL(BindFramebuffer), GL(BindBuffer), GL(ActiveTexture);
-    if (!sdl_push || !sdl_ticks || !sdl_key_from_name || !sdl_scancode_from_key || !sdl_drawable_size || !gl.Begin || !gl.GetIntegerv) {
+    if (!sdl_push || !sdl_ticks || !sdl_pad_button || !sdl_key_from_name || !sdl_scancode_from_key || !sdl_drawable_size || !gl.Begin || !gl.GetIntegerv) {
         logf("SDL or GL functions missing (%p %p %p %p %p %p); console off", (void *)sdl_push, (void *)sdl_ticks,
              (void *)sdl_key_from_name, (void *)sdl_drawable_size, (void *)gl.Begin, (void *)gl.GetIntegerv);
         return;

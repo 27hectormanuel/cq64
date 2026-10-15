@@ -197,15 +197,21 @@ struct Pad {
             if (SDL_JoystickInstanceID(SDL_GameControllerGetJoystick(gc)) == id && gc != last) use(gc);
         send();
     }
+    bool combo = false;  // LB + RB + A held: opens / closes the debug console
     void send() {
-        using Fn = void (*)(JNIEnv *, jclass, jint, jint, jint, jint, jint, jint, jint);
-        auto fn = (Fn)fakejvm::native(DEVTOOLS, "nativePad");
-        if (!fn) return;
         SDL_GameController *gc = last;
         jint buttons = keys | g_test_buttons.load();
         if (gc)
             for (int b = 0; b <= SDL_CONTROLLER_BUTTON_DPAD_RIGHT; b++)
                 if (SDL_GameControllerGetButton(gc, (SDL_GameControllerButton)b)) buttons |= 1 << b;
+        constexpr jint kShoulders = 1 << SDL_CONTROLLER_BUTTON_LEFTSHOULDER | 1 << SDL_CONTROLLER_BUTTON_RIGHTSHOULDER;
+        bool held = (buttons & kShoulders) == kShoulders && (buttons & 1 << SDL_CONTROLLER_BUTTON_A);
+        if (held && !combo) winconsole::toggle();
+        combo = held;
+        if ((buttons & kShoulders) == kShoulders) buttons &= ~(1 << SDL_CONTROLLER_BUTTON_A);  // A stays with the console
+        using Fn = void (*)(JNIEnv *, jclass, jint, jint, jint, jint, jint, jint, jint);
+        auto fn = (Fn)fakejvm::native(DEVTOOLS, "nativePad");
+        if (!fn) return;
         auto axis = [&](SDL_GameControllerAxis a) { return gc ? (jint)SDL_GameControllerGetAxis(gc, a) : 0; };
         // Android reports a resting stick as exactly 0 (each axis has a "flat" range it filters);
         // SDL passes the jitter of a resting stick on. Any change counts as controller use for the
@@ -278,7 +284,7 @@ void fmod_audio() {
 // Test input without a keyboard or mouse: lines in files/input such as "key 66" (an Android key
 // code, pressed and released), "tap 0.5 0.4" (a touch at that fraction of the window) or
 // "wait 500" (milliseconds) or "pad a 200" (a virtual controller button held that long: a b x y
-// back start ls rs lb rb up down left right). "sdlkey Return" (an SDL key name: ` F1 Tab Up ...)
+// back start ls rs lb rb up down left right; "pad lb+rb+a" holds several). "sdlkey Return" (an SDL key name: ` F1 Tab Up ...)
 // and "type <text>" go through the window's own event queue, as a real keyboard would (the
 // debug console's path).
 void debug_input() {
@@ -311,17 +317,18 @@ void debug_input() {
             } else if (char name[16]; sscanf(l.c_str(), "pad %15s %d", name, &ms) >= 1) {
                 static const char *const names[] = {"a", "b", "x", "y", "back", "guide", "start", "ls", "rs",
                                                     "lb", "rb", "up", "down", "left", "right"};
-                int bit = -1;
-                for (int i = 0; i < 15; i++)
-                    if (!strcmp(name, names[i])) bit = i;
-                if (bit < 0) continue;
+                int mask = 0;  // "lb+rb+a": several at once
+                for (char *t = strtok(name, "+"); t; t = strtok(nullptr, "+"))
+                    for (int i = 0; i < 15; i++)
+                        if (!strcmp(t, names[i])) mask |= 1 << i;
+                if (!mask) continue;
                 if (sscanf(l.c_str(), "pad %*s %d", &ms) != 1) ms = 120;
                 SDL_Event e{};
                 e.type = kPadTestEvent;
-                g_test_buttons |= 1 << bit;
+                g_test_buttons |= mask;
                 SDL_PushEvent(&e);
                 SDL_Delay(ms);
-                g_test_buttons &= ~(1 << bit);
+                g_test_buttons &= ~mask;
                 SDL_PushEvent(&e);
             } else if (char key[32]; sscanf(l.c_str(), "sdlkey %31s", key) == 1) {
                 SDL_Event e{};

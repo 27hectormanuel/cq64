@@ -8,6 +8,7 @@ namespace winconsole {
 // Main thread: takes the event if the console uses it (then the game must not see it).
 bool handle_event(const SDL_Event &e);
 bool is_open();
+void toggle();  // LB + RB + A on a controller (win_main.cpp)
 // GL thread, before the swap: draws the console over the frame when it is open.
 void draw(int width, int height);
 }  // namespace winconsole

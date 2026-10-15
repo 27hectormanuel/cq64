@@ -6,7 +6,8 @@
 // The retail game kept its Lua console (Console::ExecuteCommand) and the code that draws it
 // (Console::RequestRender, every frame), but not the code that read the keyboard into it. This
 // library puts that part back:
-//   ` or F1        open / close the console (its "active" flag, console+0x10)
+//   ` or F1        open / close the console (its "active" flag, console+0x10); also LB + RB + A
+//                  on a controller (XInputGetState is wrapped; A doesn't reach the game meanwhile)
 //   typing         fills the console's input line, which the game draws as "> text_"
 //   Enter          runs the line with the game's own ExecuteCommand: results and errors appear
 //                  in the console's line list and on screen, as the developers saw them
@@ -17,7 +18,8 @@
 // Files in the game folder, for testing without a keyboard (checked every 200 ms on that thread):
 //   cqconsole-commands.txt   Lua lines, run in turn
 //   cqconsole-keys.txt       lines "key <virtual-key code>" / "text <characters>" (posted to the window),
-//                            "input <virtual-key code>" (SendInput, as from the keyboard)
+//                            "input <virtual-key code>" (SendInput, as from the keyboard),
+//                            "pad lb+rb+a [ms]" (controller 0's buttons, added for that long)
 //   cqconsole-shot           saves the next frame as cqconsole-shot.bmp
 // Everything is logged to cqconsole.log, including each new console line.
 #include <windows.h>
@@ -26,6 +28,7 @@
 #include <string.h>
 
 #define EXPORT __declspec(dllexport)
+#define WM_CONSOLE_TOGGLE (WM_APP + 0x51)  // posted by the controller hook
 
 // ---- addresses in Cq.exe (see docs/debug-console-pc.md) ----------------------------------------
 #define G_CONSOLE ((char **)0xa915b8)         // Console *g_pConsole
@@ -59,6 +62,7 @@ static int g_hist_n, g_hist_pos = -1;
 static int g_open;
 static DWORD g_saved_input[3];  // the console's own input Array, put back on close
 static volatile LONG g_shot;
+static volatile LONG g_test_pad, g_test_pad_until;  // test buttons ("pad lb+rb+a 300"), added to pad 0
 
 static void logf(const char *fmt, ...) {
     if (!g_log) return;
@@ -222,6 +226,17 @@ static void poll_files(void) {
                 SendInput(1, &in[0], sizeof in[0]);
                 Sleep(80);
                 SendInput(1, &in[1], sizeof in[1]);
+            } else if (!strncmp(l, "pad ", 4)) {  // "pad lb+rb+a [ms]": pad 0 buttons, held that long
+                char names[64] = "";
+                int ms = 300;
+                sscanf(l + 4, "%63s %d", names, &ms);
+                LONG mask = 0;
+                for (char *t = strtok(names, "+"); t; t = strtok(NULL, "+"))
+                    mask |= !strcmp(t, "a") ? 0x1000 : !strcmp(t, "b") ? 0x2000 : !strcmp(t, "x") ? 0x4000
+                          : !strcmp(t, "y") ? 0x8000 : !strcmp(t, "lb") ? 0x100 : !strcmp(t, "rb") ? 0x200
+                          : !strcmp(t, "start") ? 0x10 : !strcmp(t, "back") ? 0x20 : 0;
+                InterlockedExchange(&g_test_pad_until, (LONG)(GetTickCount() + ms));
+                InterlockedExchange(&g_test_pad, mask);
             } else if (!strncmp(l, "text ", 5)) {
                 for (const char *p = l + 5; *p; p++) PostMessageA(g_wnd, WM_CHAR, (unsigned char)*p, 1);
             }
@@ -239,6 +254,10 @@ static void poll_files(void) {
 
 static LRESULT CALLBACK proc(HWND w, UINT m, WPARAM wp, LPARAM lp) {
     switch (m) {
+    case WM_CONSOLE_TOGGLE:
+        logf("LB + RB + A");
+        set_open(!g_open);
+        return 0;
     case WM_TIMER:
         if (wp == TIMER_ID) {
             poll_files();
@@ -376,20 +395,38 @@ static IDirect3D9 *WINAPI my_create9(UINT v) {
     return d;
 }
 
-// Points Cq.exe's import of d3d9!Direct3DCreate9 at my_create9.
-static void hook_import(void) {
+// ---- LB + RB + A on a controller (XInput) ------------------------------------------------------------
+typedef DWORD(WINAPI *XGetState)(DWORD, void *);
+static XGetState g_xinput_get_state;
+static DWORD WINAPI my_xinput_get_state(DWORD user, void *state) {
+    DWORD r = g_xinput_get_state(user, state);
+    if (r || !state) return r;
+    WORD *buttons = (WORD *)((char *)state + 4);  // XINPUT_STATE: dwPacketNumber, XINPUT_GAMEPAD (wButtons first)
+    if (user == 0 && g_test_pad && (LONG)(GetTickCount() - g_test_pad_until) < 0) *buttons |= (WORD)g_test_pad;
+    static int held[4];
+    int both = (*buttons & 0x0300) == 0x0300, now = both && (*buttons & 0x1000);  // LB 0x100, RB 0x200, A 0x1000
+    if (user < 4) {
+        if (now && !held[user] && g_wnd) PostMessageA(g_wnd, WM_CONSOLE_TOGGLE, 0, 0);  // on the game's thread
+        held[user] = now;
+    }
+    if (both) *buttons &= ~0x1000;  // A stays with the console while both shoulders are held
+    return r;
+}
+
+// Points Cq.exe's import of <dll>!<name> at fn; the original goes to *old.
+static void hook_one(const char *dll, const char *name, void *fn, void **old) {
     char *base = (char *)GetModuleHandleA(NULL);
     IMAGE_NT_HEADERS *nt = (IMAGE_NT_HEADERS *)(base + ((IMAGE_DOS_HEADER *)base)->e_lfanew);
     IMAGE_DATA_DIRECTORY dir = nt->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_IMPORT];
     for (IMAGE_IMPORT_DESCRIPTOR *d = (IMAGE_IMPORT_DESCRIPTOR *)(base + dir.VirtualAddress); d->Name; d++) {
-        if (_stricmp(base + d->Name, "d3d9.dll")) continue;
+        if (_stricmp(base + d->Name, dll)) continue;
         IMAGE_THUNK_DATA *names = (IMAGE_THUNK_DATA *)(base + d->OriginalFirstThunk);
         IMAGE_THUNK_DATA *iat = (IMAGE_THUNK_DATA *)(base + d->FirstThunk);
         for (; names->u1.AddressOfData; names++, iat++) {
             if (names->u1.Ordinal & IMAGE_ORDINAL_FLAG) continue;
-            if (strcmp((char *)((IMAGE_IMPORT_BY_NAME *)(base + names->u1.AddressOfData))->Name, "Direct3DCreate9")) continue;
-            patch_vtable((void **)&iat->u1.Function, (void *)my_create9, (void **)&g_create9);
-            logf("hooked Direct3DCreate9");
+            if (strcmp((char *)((IMAGE_IMPORT_BY_NAME *)(base + names->u1.AddressOfData))->Name, name)) continue;
+            patch_vtable((void **)&iat->u1.Function, fn, old);
+            logf("hooked %s!%s", dll, name);
         }
     }
 }
@@ -466,7 +503,8 @@ BOOL WINAPI DllMain(HINSTANCE inst, DWORD reason, void *unused) {
     g_log = fopen(p, "w");
     if (!right_exe()) return TRUE;  // DirectInput still works; the console stays off
     logf("Costume Quest debug console: ` or F1 opens it");
-    hook_import();
+    hook_one("d3d9.dll", "Direct3DCreate9", (void *)my_create9, (void **)&g_create9);
+    hook_one("XINPUT9_1_0.dll", "XInputGetState", (void *)my_xinput_get_state, (void **)&g_xinput_get_state);
     CreateThread(NULL, 0, attach, NULL, 0, NULL);
     return TRUE;
 }
