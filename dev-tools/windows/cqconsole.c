@@ -424,8 +424,9 @@ static DWORD WINAPI my_xinput_get_state(DWORD user, void *state) {
     return r;
 }
 
-// Points Cq.exe's import of <dll>!<name> at fn; the original goes to *old.
-static void hook_one(const char *dll, const char *name, void *fn, void **old) {
+// Points Cq.exe's import of <dll>!<name> (or <dll>#<ordinal>, when it imports by ordinal) at fn;
+// the original goes to *old.
+static void hook_one(const char *dll, const char *name, WORD ordinal, void *fn, void **old) {
     char *base = (char *)GetModuleHandleA(NULL);
     IMAGE_NT_HEADERS *nt = (IMAGE_NT_HEADERS *)(base + ((IMAGE_DOS_HEADER *)base)->e_lfanew);
     IMAGE_DATA_DIRECTORY dir = nt->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_IMPORT];
@@ -434,8 +435,10 @@ static void hook_one(const char *dll, const char *name, void *fn, void **old) {
         IMAGE_THUNK_DATA *names = (IMAGE_THUNK_DATA *)(base + d->OriginalFirstThunk);
         IMAGE_THUNK_DATA *iat = (IMAGE_THUNK_DATA *)(base + d->FirstThunk);
         for (; names->u1.AddressOfData; names++, iat++) {
-            if (names->u1.Ordinal & IMAGE_ORDINAL_FLAG) continue;
-            if (strcmp((char *)((IMAGE_IMPORT_BY_NAME *)(base + names->u1.AddressOfData))->Name, name)) continue;
+            if (names->u1.Ordinal & IMAGE_ORDINAL_FLAG) {
+                if (!ordinal || IMAGE_ORDINAL(names->u1.Ordinal) != ordinal) continue;
+            } else if (strcmp((char *)((IMAGE_IMPORT_BY_NAME *)(base + names->u1.AddressOfData))->Name, name))
+                continue;
             patch_vtable((void **)&iat->u1.Function, fn, old);
             logf("hooked %s!%s", dll, name);
         }
@@ -523,9 +526,10 @@ BOOL WINAPI DllMain(HINSTANCE inst, DWORD reason, void *unused) {
     g_log = fopen(p, "w");
     if (!right_exe()) return TRUE;  // DirectInput still works; the console stays off
     logf("Costume Quest debug console: ` or F1 opens it");
-    hook_one("d3d9.dll", "Direct3DCreate9", (void *)my_create9, (void **)&g_create9);
-    hook_one("XINPUT9_1_0.dll", "XInputGetState", (void *)my_xinput_get_state, (void **)&g_xinput_get_state);
-    hook_one("XINPUT1_3.dll", "XInputGetState", (void *)my_xinput_get_state, (void **)&g_xinput_get_state);  // Steam build
+    hook_one("d3d9.dll", "Direct3DCreate9", 0, (void *)my_create9, (void **)&g_create9);
+    hook_one("XINPUT9_1_0.dll", "XInputGetState", 0, (void *)my_xinput_get_state, (void **)&g_xinput_get_state);
+    // The Steam build imports XInputGetState from XINPUT1_3.dll by ordinal (2)
+    hook_one("XINPUT1_3.dll", "XInputGetState", 2, (void *)my_xinput_get_state, (void **)&g_xinput_get_state);
     CreateThread(NULL, 0, attach, NULL, 0, NULL);
     return TRUE;
 }
