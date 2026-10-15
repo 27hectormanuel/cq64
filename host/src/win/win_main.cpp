@@ -114,20 +114,118 @@ int android_key(SDL_Keycode k) {
     }
 }
 
+// The controller support DevTools.java gives the Android build: every controller drives the
+// virtual pad (the one used last), the menus switch to their controller look (highlight, button
+// prompts) while one is connected, button icons follow the controller (PlayStation icons for Sony
+// pads), and Escape on the keyboard works as B (back / cancel), which the menus need.
+const char *const kTouchModeOverride =  // DevTools.TOUCH_MODE_OVERRIDE
+    "if input and not _cqIsTouchMode then "
+    "_cqIsTouchMode = input.IsTouchMode; _cqIsGamepadMode = input.IsGamepadMode; "
+    "input.IsTouchMode = function() if _cqPad then return false end return _cqIsTouchMode() end; "
+    "input.IsGamepadMode = function() if _cqPad then return true end return _cqIsGamepadMode() end end";
+
+void dev_command(const char *lua) {
+    if (fakejvm::native(DEVTOOLS, "nativeCommand"))
+        fakejvm::call_static<void>(DEVTOOLS, "nativeCommand", (jobject)fakejvm::new_string(lua));
+}
+
+// Buttons held by the test input ("pad a 200", see debug_input), sent with the real controller's.
+std::atomic<jint> g_test_buttons{0};
+std::atomic<bool> g_test_touched{false};  // a test "tap" happened
+const Uint32 kPadTestEvent = SDL_RegisterEvents(1);
+
 struct Pad {
-    SDL_GameController *gc = nullptr;
+    std::vector<SDL_GameController *> open;
+    SDL_GameController *last = nullptr;  // the controller used last drives the pad
+    jint keys = 0;                       // pad buttons held on the keyboard (Escape = B)
+    int reported = -1, icons = -1;
+    jint sent[7] = {-1};  // last values given to the game
+    static constexpr jint kStickDeadZone = 6000, kTriggerDeadZone = 3000;  // of 32767
+
+    bool supported() const { return fakejvm::native(DEVTOOLS, "nativePad") != nullptr; }  // optimized variant
+    // Controller mode follows the input used last: on while a controller is connected, off after
+    // a touch until the next controller input. Reporting it for as long as a controller was merely
+    // connected left the battle HUD's ability button on Y after switching to touch.
+    bool touched = false;
+    void touch() {
+        touched = true;
+        report();
+    }
+    void report() {
+        int any = open.empty() || touched ? 0 : 1;
+        if (any != reported) {
+            reported = any;
+            dev_command(any ? "_cqPad = true" : "_cqPad = false");
+        }
+    }
+    void use(SDL_GameController *gc) {
+        last = gc;
+        SDL_GameControllerType t = SDL_GameControllerGetType(gc);
+        int set = t == SDL_CONTROLLER_TYPE_PS3 || t == SDL_CONTROLLER_TYPE_PS4 || t == SDL_CONTROLLER_TYPE_PS5 ? 1 : 0;
+        if (set != icons && fakejvm::native(DEVTOOLS, "nativePadIcons")) {
+            icons = set;
+            fakejvm::call_static<void>(DEVTOOLS, "nativePadIcons", (jint)set);
+        }
+    }
+    void added(int index) {
+        static const bool ignore = getenv("CQ64_IGNORE_CONTROLLERS") != nullptr;  // testing as if none were connected
+        if (ignore) return;
+        SDL_GameController *gc = SDL_GameControllerOpen(index);
+        if (!gc) return;
+        LOGI("controller: %s (type %d)", SDL_GameControllerName(gc), (int)SDL_GameControllerGetType(gc));
+        open.push_back(gc);
+        if (!last) use(gc);
+        report();
+    }
+    void removed(SDL_JoystickID id) {
+        for (size_t i = 0; i < open.size(); i++)
+            if (SDL_JoystickInstanceID(SDL_GameControllerGetJoystick(open[i])) == id) {
+                if (open[i] == last) last = nullptr;
+                SDL_GameControllerClose(open[i]);
+                open.erase(open.begin() + i);
+                break;
+            }
+        if (!last && !open.empty()) use(open[0]);
+        report();
+        send();
+    }
+    void event(SDL_JoystickID id) {
+        for (SDL_GameController *gc : open)
+            if (SDL_JoystickInstanceID(SDL_GameControllerGetJoystick(gc)) == id && gc != last) use(gc);
+        send();
+    }
     void send() {
         using Fn = void (*)(JNIEnv *, jclass, jint, jint, jint, jint, jint, jint, jint);
         auto fn = (Fn)fakejvm::native(DEVTOOLS, "nativePad");
-        if (!fn) return;  // the original variant has no controller support
-        jint buttons = 0;
+        if (!fn) return;
+        SDL_GameController *gc = last;
+        jint buttons = keys | g_test_buttons.load();
         if (gc)
             for (int b = 0; b <= SDL_CONTROLLER_BUTTON_DPAD_RIGHT; b++)
                 if (SDL_GameControllerGetButton(gc, (SDL_GameControllerButton)b)) buttons |= 1 << b;
         auto axis = [&](SDL_GameControllerAxis a) { return gc ? (jint)SDL_GameControllerGetAxis(gc, a) : 0; };
-        fn(fakejvm::env(), fakejvm::find_class(DEVTOOLS), buttons, axis(SDL_CONTROLLER_AXIS_LEFTX),
-           axis(SDL_CONTROLLER_AXIS_LEFTY), axis(SDL_CONTROLLER_AXIS_RIGHTX), axis(SDL_CONTROLLER_AXIS_RIGHTY),
-           axis(SDL_CONTROLLER_AXIS_TRIGGERLEFT), axis(SDL_CONTROLLER_AXIS_TRIGGERRIGHT));
+        // Android reports a resting stick as exactly 0 (each axis has a "flat" range it filters);
+        // SDL passes the jitter of a resting stick on. Any change counts as controller use for the
+        // game, so without a dead zone it keeps switching the HUD back to controller icons after
+        // a touch. Same for triggers resting slightly pressed.
+        auto stick = [&](SDL_GameControllerAxis ax, SDL_GameControllerAxis ay, jint &x, jint &y) {
+            x = axis(ax), y = axis(ay);
+            if ((long)x * x + (long)y * y < (long)kStickDeadZone * kStickDeadZone) x = y = 0;
+        };
+        auto trigger = [&](SDL_GameControllerAxis a) { jint v = axis(a); return v < kTriggerDeadZone ? 0 : v; };
+        jint v[7] = {buttons};
+        stick(SDL_CONTROLLER_AXIS_LEFTX, SDL_CONTROLLER_AXIS_LEFTY, v[1], v[2]);
+        stick(SDL_CONTROLLER_AXIS_RIGHTX, SDL_CONTROLLER_AXIS_RIGHTY, v[3], v[4]);
+        v[5] = trigger(SDL_CONTROLLER_AXIS_TRIGGERLEFT), v[6] = trigger(SDL_CONTROLLER_AXIS_TRIGGERRIGHT);
+        if (!memcmp(v, sent, sizeof v)) return;  // nothing the game would see changed
+        memcpy(sent, v, sizeof v);
+        if (touched && (v[0] | v[1] | v[2] | v[3] | v[4] | v[5] | v[6])) {
+            LOGI("controller input after a touch (%s): buttons %x sticks %d,%d %d,%d triggers %d %d",
+                 gc ? SDL_GameControllerName(gc) : "-", v[0], v[1], v[2], v[3], v[4], v[5], v[6]);
+            touched = false;
+            report();
+        }
+        fn(fakejvm::env(), fakejvm::find_class(DEVTOOLS), v[0], v[1], v[2], v[3], v[4], v[5], v[6]);
     }
 };
 }  // namespace
@@ -176,7 +274,8 @@ void fmod_audio() {
 
 // Test input without a keyboard or mouse: lines in files/input such as "key 66" (an Android key
 // code, pressed and released), "tap 0.5 0.4" (a touch at that fraction of the window) or
-// "wait 500" (milliseconds).
+// "wait 500" (milliseconds) or "pad a 200" (a virtual controller button held that long: a b x y
+// back start ls rs lb rb up down left right).
 void debug_input() {
     const std::string path = win::files_dir() + "/input";
     for (;;) {
@@ -189,6 +288,7 @@ void debug_input() {
         fclose(f);
         unlink(path.c_str());
         for (const std::string &l : lines) {
+            LOGI("test input: %.*s", (int)l.find_last_not_of("\r\n") + 1, l.c_str());
             int k, ms;
             float x, y;
             if (sscanf(l.c_str(), "key %d", &k) == 1) {
@@ -196,9 +296,28 @@ void debug_input() {
                 SDL_Delay(120);
                 fakejvm::call_static<void>(SDLA, "onNativeKeyUp", (jint)k);
             } else if (sscanf(l.c_str(), "tap %f %f", &x, &y) == 2) {
+                SDL_Event e{};
+                e.type = kPadTestEvent;
+                g_test_touched = true;
+                SDL_PushEvent(&e);
                 fakejvm::call_static<void>(SDLA, "onNativeTouch", (jint)0, (jint)0, (jint)0, (jfloat)x, (jfloat)y, 1.0f);
                 SDL_Delay(120);
                 fakejvm::call_static<void>(SDLA, "onNativeTouch", (jint)0, (jint)0, (jint)1, (jfloat)x, (jfloat)y, 1.0f);
+            } else if (char name[16]; sscanf(l.c_str(), "pad %15s %d", name, &ms) >= 1) {
+                static const char *const names[] = {"a", "b", "x", "y", "back", "guide", "start", "ls", "rs",
+                                                    "lb", "rb", "up", "down", "left", "right"};
+                int bit = -1;
+                for (int i = 0; i < 15; i++)
+                    if (!strcmp(name, names[i])) bit = i;
+                if (bit < 0) continue;
+                if (sscanf(l.c_str(), "pad %*s %d", &ms) != 1) ms = 120;
+                SDL_Event e{};
+                e.type = kPadTestEvent;
+                g_test_buttons |= 1 << bit;
+                SDL_PushEvent(&e);
+                SDL_Delay(ms);
+                g_test_buttons &= ~(1 << bit);
+                SDL_PushEvent(&e);
             } else if (sscanf(l.c_str(), "wait %d", &ms) == 1) {
                 SDL_Delay(ms);
             }
@@ -317,6 +436,8 @@ int main(int argc, char **argv) {
     std::thread(debug_input).detach();
 
     Pad pad;
+    dev_command(kTouchModeOverride);  // queued until the game's Lua console exists
+    pad.report();
     bool mouse_down = false;
     for (;;) {
         SDL_Event e;
@@ -333,6 +454,12 @@ int main(int argc, char **argv) {
                 if (e.type == SDL_KEYDOWN) win::g_shot_requested = true;
                 break;
             }
+            if (e.key.keysym.sym == SDLK_ESCAPE && pad.supported()) {  // Escape = B: back / cancel
+                pad.keys = e.type == SDL_KEYDOWN ? pad.keys | (1 << SDL_CONTROLLER_BUTTON_B)
+                                                 : pad.keys & ~(1 << SDL_CONTROLLER_BUTTON_B);
+                pad.send();
+                break;
+            }
             if (int k = android_key(e.key.keysym.sym))
                 call_static<void>(SDLA, e.type == SDL_KEYDOWN ? "onNativeKeyDown" : "onNativeKeyUp", (jint)k);
             break;
@@ -342,6 +469,7 @@ int main(int argc, char **argv) {
             if (e.type == SDL_MOUSEMOTION && !mouse_down) break;
             if (e.type != SDL_MOUSEMOTION && e.button.button != SDL_BUTTON_LEFT) break;
             int action = e.type == SDL_MOUSEBUTTONDOWN ? 0 : e.type == SDL_MOUSEBUTTONUP ? 1 : 2;
+            if (action == 0) pad.touch();
             mouse_down = action != 1;
             int x = e.type == SDL_MOUSEMOTION ? e.motion.x : e.button.x;
             int y = e.type == SDL_MOUSEMOTION ? e.motion.y : e.button.y;
@@ -350,24 +478,24 @@ int main(int argc, char **argv) {
             break;
         }
         case SDL_CONTROLLERDEVICEADDED:
-            if (!pad.gc) {
-                pad.gc = SDL_GameControllerOpen(e.cdevice.which);
-                LOGI("controller: %s", pad.gc ? SDL_GameControllerName(pad.gc) : SDL_GetError());
-            }
+            pad.added(e.cdevice.which);
             break;
         case SDL_CONTROLLERDEVICEREMOVED:
-            if (pad.gc && e.cdevice.which == SDL_JoystickInstanceID(SDL_GameControllerGetJoystick(pad.gc))) {
-                SDL_GameControllerClose(pad.gc);
-                pad.gc = nullptr;
-                pad.send();
-            }
+            pad.removed(e.cdevice.which);
             break;
         case SDL_CONTROLLERBUTTONDOWN:
         case SDL_CONTROLLERBUTTONUP:
-        case SDL_CONTROLLERAXISMOTION:
-            pad.send();
+            pad.event(e.cbutton.which);
             break;
-        default: break;
+        case SDL_CONTROLLERAXISMOTION:
+            pad.event(e.caxis.which);
+            break;
+        default:
+            if (e.type == kPadTestEvent) {
+                if (g_test_touched.exchange(false)) pad.touch();
+                pad.send();
+            }
+            break;
         }
     }
 }

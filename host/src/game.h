@@ -23,6 +23,11 @@ extern const std::vector<GuestLib> kLibs;
 
 // Private files directory, /data/data/<package>/files.
 std::string files_dir();
+// A debug switch, read once when it is first used: the environment variable CQ64_<NAME>
+// (convenient on Windows) or else the file files/<name> (on Android:
+// adb shell run-as <package> sh -c 'echo VALUE > files/<name>'). Returns its value with trailing
+// whitespace removed, "1" if it is set but empty, or "" if it is not set.
+std::string debug_setting(const char *name);
 
 // Before the guest libraries are loaded: path mappings and similar setup.
 void setup();

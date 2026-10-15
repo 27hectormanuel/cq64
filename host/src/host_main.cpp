@@ -32,6 +32,21 @@ std::string files_dir() { return std::string("/data/data/") + kPackage + "/files
 }  // namespace game
 #endif
 
+namespace game {
+std::string debug_setting(const char *name) {
+    std::string var = "CQ64_";
+    for (const char *c = name; *c; c++) var += (char)toupper((unsigned char)*c);
+    if (const char *v = getenv(var.c_str())) return *v ? v : "1";
+    FILE *f = fopen((files_dir() + "/" + name).c_str(), "r");
+    if (!f) return "";
+    char buf[512];
+    std::string v(buf, fread(buf, 1, sizeof buf - 1, f));
+    fclose(f);
+    while (!v.empty() && isspace((unsigned char)v.back())) v.pop_back();
+    return v.empty() ? "1" : v;
+}
+}  // namespace game
+
 namespace host {
 void mkdirs(const std::string &path) {
     for (size_t i = 1; i <= path.size(); i++)

@@ -28,7 +28,8 @@ pthread, GL and JNI bridges — packaged as a desktop program:
   (optimized variant). Lightly tested. No developer menu yet.
 - Debugging: `cq64.log`; F12 or a file named `screenshot` in `cq64-data/files` saves the game's
   own frame; a file named `input` there sends input (`key 66`, `tap 0.5 0.4`, `wait 500`, one per
-  line); `CQ64_DUMP_SHADERS=1` writes every shader the game compiles to `cq64-data/shaders`.
+  line); `CQ64_DUMP_SHADERS=1` writes every shader the game compiles to `cq64-data/files/shaders`
+  (all debug switches: [debug-console.md](debug-console.md#8-debug-switches-both-builds)).
 
 ## Build (from Linux or WSL2)
 

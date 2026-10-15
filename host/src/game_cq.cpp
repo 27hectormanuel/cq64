@@ -68,7 +68,9 @@ void register_natives(JNIEnv *env) {
 
 // Debug aids:
 //   echo 'cmd' | adb shell run-as com.doublefine.cq sh -c 'cat > files/console'   runs console commands
-//   echo '1 150' | ... sh -c 'cat > files/pad'   presses virtual pad buttons (mask, ms) in turn
+//   echo '1 150' | ... sh -c 'cat > files/pad'   presses virtual pad buttons in turn: a mask or a
+//                                                 button name (a b x y back guide start ls rs lb rb
+//                                                 up down left right), then milliseconds
 //   ... sh -c 'echo 1 > files/padauto'   plays battle prompts with synthetic pad input (0: off);
 //                                        'echo 1 5 > ...' also makes every prompt BattlePrompt 5 (-1: off)
 #ifdef CQ_ORIGINAL
@@ -86,10 +88,19 @@ void poll_debug() {
     }
     const std::string pad = files_dir() + "/pad", console = files_dir() + "/console";
     if (FILE *f = fopen(pad.c_str(), "r")) {
-        unsigned mask;
+        static const char *const names[] = {"a", "b", "x", "y", "back", "guide", "start", "ls",
+                                            "rs", "lb", "rb", "up", "down", "left", "right"};
+        char what[16];
         int ms;
-        while (fscanf(f, "%i %d", &mask, &ms) == 2) {
-            gamepad::debug_press(mask, ms);
+        while (fscanf(f, "%15s %d", what, &ms) == 2) {
+            char *end;
+            unsigned mask = strtoul(what, &end, 0);
+            if (*end) {
+                mask = 0;
+                for (int i = 0; i < 15; i++)
+                    if (!strcasecmp(what, names[i])) mask = 1u << i;
+            }
+            if (mask) gamepad::debug_press(mask, ms);
             usleep(300 * 1000);
         }
         fclose(f);

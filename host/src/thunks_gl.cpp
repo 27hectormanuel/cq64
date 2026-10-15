@@ -9,6 +9,8 @@
 #include <GLES/glext.h>
 #include <GLES2/gl2.h>
 
+#include <sys/stat.h>
+
 #include <algorithm>
 #include <atomic>
 #include <mutex>
@@ -57,7 +59,31 @@ void t_glNormalPointer(GLenum type, GLsizei stride, u32 p) {
     glNormalPointer(type, stride, client_ptr(p, g_array_buffer));
 }
 THUNK(glNormalPointer, t_glNormalPointer);
+// Debug switch skip_shader=<text>[,<text>...] (game::debug_setting): draws whose shaders' names
+// (the "// Name" line the game's shaders start with) contain one of these are skipped, to find
+// which effect draws something wrong.
+const std::string &skip_list() {
+    static const std::string list = game::debug_setting("skip_shader");
+    return list;
+}
+std::mutex g_names_lock;
+std::unordered_map<GLuint, std::string> g_shader_names, g_program_names;
+bool g_skip_draws = false;
+bool skip_program(GLuint prog) {
+    const std::string &list = skip_list();
+    if (list.empty()) return false;
+    std::lock_guard<std::mutex> lk(g_names_lock);
+    const std::string &names = g_program_names[prog];
+    for (size_t a = 0; a < list.size();) {
+        size_t b = list.find(',', a);
+        if (b == std::string::npos) b = list.size();
+        if (b > a && names.find(list.substr(a, b - a)) != std::string::npos) return true;
+        a = b + 1;
+    }
+    return false;
+}
 void t_glDrawElements(GLenum mode, GLsizei count, GLenum type, u32 p) {
+    if (g_skip_draws) return;
     glDrawElements(mode, count, type, client_ptr(p, g_element_buffer));
 }
 THUNK(glDrawElements, t_glDrawElements);
@@ -73,6 +99,33 @@ u32 t_glGetString(GLenum name) {
     LOGI("glGetString(0x%x) = %s", name, s);
     std::string v = s;
 #ifdef _WIN32
+    // Extensions the game checks for (its GL wrapper's GLUE_* flags) that ANGLE offers but the
+    // Mali GPU of the reference phone (Pixel 8 Pro, Mali-G715) doesn't. Each switches the game to
+    // a drawing path it never takes on the phone (float render targets, instancing through ANGLE
+    // entry points the guest can't get, map_buffer_range, ...); together they caused coloured
+    // light beams and full-screen flashes in battles. Hiding them gives the game the phone's
+    // paths. (The DXT names stay: the Tegra APK needs them, and they only affect texture uploads.)
+    if (name == GL_EXTENSIONS) {
+        static const char *const hidden[] = {
+            "GL_AMD_performance_monitor", "GL_ANGLE_depth_texture", "GL_ANGLE_framebuffer_blit",
+            "GL_ANGLE_framebuffer_multisample", "GL_ANGLE_instanced_arrays", "GL_ANGLE_pack_reverse_row_order",
+            "GL_ANGLE_texture_usage", "GL_ANGLE_translated_shader_source", "GL_EXT_debug_label", "GL_EXT_frag_depth",
+            "GL_EXT_map_buffer_range", "GL_EXT_shader_texture_lod", "GL_NV_fence", "GL_NV_framebuffer_blit",
+            "GL_NV_pack_subimage", "GL_NV_pixel_buffer_object", "GL_OES_depth32", "GL_OES_texture_float",
+            "GL_OES_texture_half_float", "GL_EXT_instanced_arrays", "GL_NV_draw_instanced", "GL_EXT_texture_storage"};
+        std::string kept, tok;
+        for (size_t i = 0; i <= v.size(); i++) {
+            if (i < v.size() && v[i] != ' ') {
+                tok += v[i];
+                continue;
+            }
+            bool hide = false;
+            for (const char *h : hidden) hide |= tok == h;
+            if (!tok.empty() && !hide) kept += (kept.empty() ? "" : " ") + tok;
+            tok.clear();
+        }
+        v = kept;
+    }
     // ATC (Adreno) textures are decoded to RGBA8 below when the GPU lacks them. Costume Quest's
     // data pack has only ATC textures; without ATC in this list the game uploads them as
     // "compressed GL_RGBA", which ANGLE rejects, and the world draws black.
@@ -92,12 +145,11 @@ THUNK(glGetString, t_glGetString);
 void t_glShaderSource(GLuint sh, GLsizei count, G<const u32> strs, G<const GLint> lens) {
     std::vector<const char *> v(count);
     for (GLsizei i = 0; i < count; i++) v[i] = (const char *)g2h(strs.get()[i]);
-#ifdef _WIN32
-    // CQ64_DUMP_SHADERS=1: every shader the game compiles, to cq64-data/shaders/<id>.glsl.
-    static const bool dump = getenv("CQ64_DUMP_SHADERS") != nullptr;
+    // Debug switch dump_shaders: every shader the game compiles, to files/shaders/<n>_<id>.glsl.
+    static const bool dump = !game::debug_setting("dump_shaders").empty();
     if (dump) {
         static std::atomic<int> n{0};
-        std::string dir = game::files_dir() + "/../shaders";
+        std::string dir = game::files_dir() + "/shaders";
         mkdir(dir.c_str(), 0700);
         if (FILE *f = fopen((dir + "/" + std::to_string(n++) + "_" + std::to_string(sh) + ".glsl").c_str(), "w")) {
             for (GLsizei i = 0; i < count; i++) {
@@ -107,7 +159,11 @@ void t_glShaderSource(GLuint sh, GLsizei count, G<const u32> strs, G<const GLint
             fclose(f);
         }
     }
-#endif
+    if (!skip_list().empty() && count > 0 && !strncmp(v[0], "// ", 3)) {  // names for skip_shader
+        const char *end = strchr(v[0], '\n');
+        std::lock_guard<std::mutex> lk(g_names_lock);
+        g_shader_names[sh].assign(v[0] + 3, end ? end - v[0] - 3 : strlen(v[0] + 3));
+    }
     glShaderSource(sh, count, v.data(), lens);
 }
 THUNK(glShaderSource, t_glShaderSource);
@@ -155,7 +211,14 @@ THUNK(glFlushMappedBufferRangeEXT, t_glFlushMappedBufferRangeEXT);
 // ---- straightforward pass-through ----
 #define P(T) G<T>
 void t_glActiveTexture(GLenum a) { glActiveTexture(a); } THUNK(glActiveTexture, t_glActiveTexture);
-void t_glAttachShader(GLuint p, GLuint s) { glAttachShader(p, s); } THUNK(glAttachShader, t_glAttachShader);
+void t_glAttachShader(GLuint p, GLuint s) {
+    if (!skip_list().empty()) {
+        std::lock_guard<std::mutex> lk(g_names_lock);
+        g_program_names[p] += g_shader_names[s] + " ";
+    }
+    glAttachShader(p, s);
+}
+THUNK(glAttachShader, t_glAttachShader);
 void t_glBindAttribLocation(GLuint p, GLuint i, P(const char) n) { glBindAttribLocation(p, i, n); } THUNK(glBindAttribLocation, t_glBindAttribLocation);
 void t_glBindFramebuffer(GLenum t, GLuint f) { glBindFramebuffer(t, f); } THUNK(glBindFramebuffer, t_glBindFramebuffer);
 void t_glBindRenderbuffer(GLenum t, GLuint r) { glBindRenderbuffer(t, r); } THUNK(glBindRenderbuffer, t_glBindRenderbuffer);
@@ -188,10 +251,9 @@ void t_glCompileShader(GLuint s) {
 #endif
 }
 THUNK(glCompileShader, t_glCompileShader);
-#ifdef _WIN32
-// CQ64_GL_STATS=1: texture uploads counted by GL format, logged every 500 uploads.
+// Debug switch gl_stats: texture uploads counted by GL format, logged every 500 uploads.
 void tex_stat(const char *kind, GLenum format) {
-    static const bool on = getenv("CQ64_GL_STATS") != nullptr;
+    static const bool on = !game::debug_setting("gl_stats").empty();
     if (!on) return;
     static std::mutex lock;
     static std::unordered_map<std::string, int> counts;
@@ -206,9 +268,6 @@ void tex_stat(const char *kind, GLenum format) {
         LOGI("texture uploads after %d:%s", total, out.c_str());
     }
 }
-#else
-inline void tex_stat(const char *, GLenum) {}
-#endif
 // ---- ATC (ATI/AMD texture compression) fallback
 // Some games ship only ATC textures (GL_AMD_compressed_ATC_texture, Qualcomm Adreno only). On
 // other GPUs they are decoded to RGBA8 here and uploaded uncompressed.
@@ -435,7 +494,9 @@ void t_glDepthMask(GLboolean f) { glDepthMask(f); } THUNK(glDepthMask, t_glDepth
 void t_glDisable(GLenum c) { glDisable(c); } THUNK(glDisable, t_glDisable);
 void t_glDisableClientState(GLenum c) { glDisableClientState(c); } THUNK(glDisableClientState, t_glDisableClientState);
 void t_glDisableVertexAttribArray(GLuint i) { glDisableVertexAttribArray(i); } THUNK(glDisableVertexAttribArray, t_glDisableVertexAttribArray);
-void t_glDrawArrays(GLenum m, GLint f, GLsizei c) { glDrawArrays(m, f, c); } THUNK(glDrawArrays, t_glDrawArrays);
+void t_glDrawArrays(GLenum m, GLint f, GLsizei c) {
+    if (!g_skip_draws) glDrawArrays(m, f, c);
+} THUNK(glDrawArrays, t_glDrawArrays);
 void t_glDrawTexfOES(float x, float y, float z, float w, float h) { glDrawTexfOES(x, y, z, w, h); } THUNK(glDrawTexfOES, t_glDrawTexfOES);
 void t_glEnable(GLenum c) { glEnable(c); } THUNK(glEnable, t_glEnable);
 void t_glEnableClientState(GLenum c) { glEnableClientState(c); } THUNK(glEnableClientState, t_glEnableClientState);
@@ -518,7 +579,10 @@ void t_glUniform1iv(GLint l, GLsizei n, P(const GLint) v) { glUniform1iv(l, n, v
 void t_glUniform4f(GLint l, float a, float b, float c, float d) { glUniform4f(l, a, b, c, d); } THUNK(glUniform4f, t_glUniform4f);
 void t_glUniform4fv(GLint l, GLsizei n, P(const GLfloat) v) { glUniform4fv(l, n, v); } THUNK(glUniform4fv, t_glUniform4fv);
 void t_glUniformMatrix4fv(GLint l, GLsizei n, GLboolean tr, P(const GLfloat) v) { glUniformMatrix4fv(l, n, tr, v); } THUNK(glUniformMatrix4fv, t_glUniformMatrix4fv);
-void t_glUseProgram(GLuint p) { glUseProgram(p); } THUNK(glUseProgram, t_glUseProgram);
+void t_glUseProgram(GLuint p) {
+    g_skip_draws = skip_program(p);
+    glUseProgram(p);
+} THUNK(glUseProgram, t_glUseProgram);
 void t_glViewport(GLint x, GLint y, GLsizei w, GLsizei h) { glViewport(x, y, w, h); } THUNK(glViewport, t_glViewport);
 #undef P
 }  // namespace

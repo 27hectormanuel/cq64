@@ -129,14 +129,40 @@ Handy commands include `debug.AcquireAllCostumes()`, `debug.GetAllStamps()`,
 The host also watches two more files in the app's private storage (same `run-as ... sh -c 'cat >
 files/NAME'` pattern as above):
 
-- `files/pad` — lines of `MASK MILLISECONDS` hold virtual controller buttons in turn (bit 0 = A,
-  1 = B, 2 = X, 3 = Y, 11-14 = d-pad up/down/left/right), e.g. `echo '4 120'` presses X.
+- `files/pad` — lines of `BUTTON MILLISECONDS` hold virtual controller buttons in turn. BUTTON is
+  a name (`a b x y back guide start ls rs lb rb up down left right`) or a mask (bit 0 = A, 1 = B,
+  2 = X, 3 = Y, 11-14 = d-pad up/down/left/right), e.g. `echo 'x 120'` or `echo '4 120'` presses X.
 - `files/padauto` — `1` makes the host answer every battle prompt with synthetic controller input
   (the right face button, a d-pad flick, a press inside the timing window, or a stick wiggle);
   `1 N` additionally turns every prompt into `BattlePrompt` N (0-3 press, 4-7 swipe, 8-11 mash,
   12-15 timed press, 16-19 timed swipe, 20 rub); `0 -1` turns both off. Prompt types and results
   are logged (`adb logcat -s cqhost`). These change how battles play, so switch them off after
   testing.
+
+## 8. Debug switches (both builds)
+
+Read once at startup, so set them before launching the game. Each is the environment variable
+`CQ64_<NAME>` (handy on Windows: `CQ64_SKIP_SHADER=Particle "Costume Quest Mobile.exe"`, or before
+`play-on-linux.sh`) or the file `files/<name>` (on Android: `adb shell run-as com.doublefine.cq sh
+-c 'echo Particle > files/skip_shader'`, then restart the game; on Windows `cq64-data/files/`).
+Delete the file to switch it off again.
+
+| Switch | Value | Effect |
+|---|---|---|
+| `skip_shader` | text[,text...] | Skips every draw whose shader names (the `// Name` line the game's shaders start with) contain one of these: finds which effect draws something wrong. |
+| `dump_shaders` | any | Writes every shader the game compiles to `files/shaders/<n>_<id>.glsl` (names, uniforms, code). |
+| `gl_stats` | any | Logs texture uploads counted by GL format every 500 uploads (which texture formats an APK uses). |
+
+Windows only (in `host/src/win/win_main.cpp`):
+
+- `cq64-data/files/input` — lines `key 66` (an Android key code), `tap 0.5 0.4` (a touch at that
+  fraction of the window), `pad a 200` (a virtual controller button held that long; goes through
+  the same path as a real controller, so it also ends touch mode) or `wait 500`. Each line is logged
+  as `test input: ...`.
+- `cq64-data/files/screenshot` — the next frame is saved as `screenshot.bmp` next to the program
+  (F12 does the same).
+- `CQ64_IGNORE_CONTROLLERS=1` — behaves as if no controller were connected (tests touch-only play).
+- The log names the controller input that ends touch mode (`controller input after a touch`).
 
 If the guest crashes, the register dump and the guest backtrace are also appended to
 `files/crash.log`, since logcat can drop them when the game logs a lot.

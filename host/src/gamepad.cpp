@@ -69,6 +69,7 @@ u32 g_handle_input_orig, g_push_vars_orig;  // trampolines to the hooked origina
 u32 g_set_bool;                             // FlashValueSnapshot::SetGlobalVariable(Name const&, bool)
 u32 g_name_show_pc;                         // guest Name holding "ShowPCButtons"
 u32 g_name_minigame_visible;                // guest Name holding "MinigameVisible"
+u32 g_name_last_costume;                    // guest Name holding "_lastCurrentCostume"
 std::atomic<u32> g_pressed{0};              // buttons pressed since the game thread last looked
 u32 g_bind_texture_orig;
 u32 g_create_image_orig;  // FlashImageCreator::CreateImage
@@ -481,6 +482,12 @@ void t_push_vars(u32 snapshot) {
     static u32 logged = 2;
     if (show_pc != logged) LOGI("gamepad: battle HUD ShowPCButtons=%u", logged = show_pc);
     cpu::call32(g_set_bool, {snapshot, g_name_show_pc, show_pc});
+    // The HUD script sets the ability button (button_y) to the costume's touch picture only when
+    // the costume changes, but puts it on its controller frame (the Y icon) at every battle start
+    // and on every switch to controller icons. So from the second battle with the same costume,
+    // and after any switch back to touch, it showed Y. Forgetting the costume it last showed makes
+    // it pick the right frame on every update: "Robot" != false, while no costume ("") == false.
+    cpu::call32(g_set_bool, {snapshot, g_name_last_costume, 0});
     // The tap targets around a prompt are for touch; with a controller the prompt text (with its
     // button icon) is all the PC version shows.
     if (!show_pc) cpu::call32(g_set_bool, {snapshot, g_name_minigame_visible, 0});
@@ -546,6 +553,7 @@ void install(Module *cq) {
     };
     g_name_show_pc = name("ShowPCButtons");
     g_name_minigame_visible = name("MinigameVisible");
+    g_name_last_costume = name("_lastCurrentCostume");
     if (datapatch::icon_library_ready()) {
         g_bind_texture_orig = hook_arm(cq, "_ZN5RsRefI7TextureE8BindFileEPKcb",
                                        cpu::add_thunk("pad_bind_texture", &abi::wrapped<t_bind_texture>));
