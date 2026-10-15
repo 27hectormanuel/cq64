@@ -6,12 +6,16 @@
 // nobody implemented are logged and return zero, so new needs show up in cq64.log.
 #include <jni.h>
 
+#include <cstdint>
 #include <string>
+#include <vector>
 
 namespace win {
 // Host paths: the game's private files directory and the user's APK (set by win_main).
 std::string files_dir();
 std::string apk_path();
+// Guest libraries built into cq64.exe (the guest runtime, libguestrt.so).
+bool builtin_lib(const char *soname, std::vector<uint8_t> &out);
 // Called on the game's render thread before each frame is presented (screenshots).
 void before_swap();
 // The path the game sees for its APK ("/data/app/.../base.apk"), mapped to apk_path().
@@ -34,6 +38,11 @@ void set_window_size(int width, int height);
 // A native method registered with RegisterNatives (by JNI_OnLoad), or null.
 void *native(const char *cls, const char *name);
 jclass find_class(const char *name);
+// Reads the APK's directory (false if it isn't a zip); then apk_has/read_apk work.
+bool open_apk(const std::string &path);
+bool apk_has(const char *name);
+// A file inside the APK, e.g. "lib/armeabi-v7a/libCq.so".
+bool read_apk(const char *name, std::vector<uint8_t> &out);
 
 // Calls a registered native the way Java would: static natives get their class as `this`.
 template <class R = void, class... A> R call_static(const char *cls, const char *name, A... a) {

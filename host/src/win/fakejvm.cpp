@@ -196,30 +196,38 @@ struct ZipEntry {
     uint16_t method;
 };
 std::map<std::string, ZipEntry> g_assets_dir;
+std::map<std::string, ZipEntry> g_apk_dir;  // every entry
 
-void read_zip_dir(const std::string &apk) {
+bool read_zip_dir(const std::string &apk) {
     FILE *f = fopen(apk.c_str(), "rb");
-    if (!f) fatal("cannot open the APK %s", apk.c_str());
+    if (!f) return false;
     _fseeki64(f, 0, SEEK_END);
     long long size = _ftelli64(f);
     long long tail = std::min<long long>(size, 65557);
     std::vector<uint8_t> t(tail);
     _fseeki64(f, size - tail, SEEK_SET);
-    if (fread(t.data(), 1, tail, f) != (size_t)tail) fatal("cannot read the APK");
+    if (fread(t.data(), 1, tail, f) != (size_t)tail) {
+        fclose(f);
+        return false;
+    }
     long long eocd = -1;
     for (long long i = tail - 22; i >= 0; i--)
         if (t[i] == 'P' && t[i + 1] == 'K' && t[i + 2] == 5 && t[i + 3] == 6) {
             eocd = i;
             break;
         }
-    if (eocd < 0) fatal("%s is not a zip/APK", apk.c_str());
+    if (eocd < 0) {
+        fclose(f);
+        return false;
+    }
     uint32_t cd_size, cd_off;
     memcpy(&cd_size, &t[eocd + 12], 4);
     memcpy(&cd_off, &t[eocd + 16], 4);
     std::vector<uint8_t> cd(cd_size);
     _fseeki64(f, cd_off, SEEK_SET);
-    if (fread(cd.data(), 1, cd_size, f) != cd_size) fatal("cannot read the APK's directory");
+    bool ok = fread(cd.data(), 1, cd_size, f) == cd_size;
     fclose(f);
+    if (!ok) return false;
     for (size_t p = 0; p + 46 <= cd.size();) {
         uint16_t method, nl, el, cl;
         uint32_t csize, usize, off;
@@ -231,10 +239,12 @@ void read_zip_dir(const std::string &apk) {
         memcpy(&cl, &cd[p + 32], 2);
         memcpy(&off, &cd[p + 42], 4);
         std::string name((const char *)&cd[p + 46], nl);
+        g_apk_dir[name] = ZipEntry{off, csize, usize, method};
         if (name.rfind("assets/", 0) == 0) g_assets_dir[name.substr(7)] = ZipEntry{off, csize, usize, method};
         p += 46 + nl + el + cl;
     }
     LOGI("fakejvm: %zu assets in %s", g_assets_dir.size(), apk.c_str());
+    return true;
 }
 
 // Offset of an entry's data (after its local header).
@@ -245,6 +255,32 @@ long long data_offset(int fd, const ZipEntry &e) {
     memcpy(&nl, &h[26], 2);
     memcpy(&el, &h[28], 2);
     return (long long)e.local_offset + 30 + nl + el;
+}
+
+// An entry's uncompressed contents (stored or deflated).
+bool read_entry(const ZipEntry &e, std::vector<uint8_t> &out) {
+    int fd = _open(win::apk_path().c_str(), _O_RDONLY | _O_BINARY);
+    if (fd < 0) return false;
+    long long off = data_offset(fd, e);
+    std::vector<uint8_t> raw(e.csize);
+    bool ok = off >= 0 && pread(fd, raw.data(), raw.size(), off) == (ssize_t)raw.size();
+    _close(fd);
+    if (ok && e.method == 0) {
+        out = std::move(raw);
+    } else if (ok && e.method == 8) {
+        out.resize(e.usize);
+        z_stream z{};
+        inflateInit2(&z, -MAX_WBITS);
+        z.next_in = raw.data();
+        z.avail_in = (uInt)raw.size();
+        z.next_out = out.data();
+        z.avail_out = (uInt)out.size();
+        ok = inflate(&z, Z_FINISH) == Z_STREAM_END;
+        inflateEnd(&z);
+    } else {
+        ok = false;
+    }
+    return ok;
 }
 
 const ZipEntry *asset(const std::string &name) {
@@ -383,31 +419,8 @@ void define_classes() {
     def(AM, "open", "(Ljava/lang/String;I)Ljava/io/InputStream;", [](Obj *, const jvalue *a) {
         std::string name = sval(a[0]);
         const ZipEntry *e = asset(name);
-        int fd = e ? _open(win::apk_path().c_str(), _O_RDONLY | _O_BINARY) : -1;
-        long long off = fd < 0 ? -1 : data_offset(fd, *e);
         auto *s = make<Stream>("java/io/InputStream");
-        bool ok = off >= 0;
-        if (ok) {
-            std::vector<uint8_t> raw(e->csize);
-            ok = pread(fd, raw.data(), raw.size(), off) == (ssize_t)raw.size();
-            if (ok && e->method == 0) {
-                s->data = std::move(raw);
-            } else if (ok && e->method == 8) {
-                s->data.resize(e->usize);
-                z_stream z{};
-                inflateInit2(&z, -MAX_WBITS);
-                z.next_in = raw.data();
-                z.avail_in = (uInt)raw.size();
-                z.next_out = s->data.data();
-                z.avail_out = (uInt)s->data.size();
-                ok = inflate(&z, Z_FINISH) == Z_STREAM_END;
-                inflateEnd(&z);
-            } else {
-                ok = false;
-            }
-        }
-        if (fd >= 0) _close(fd);
-        if (!ok) {
+        if (!e || !read_entry(*e, s->data)) {
             delete s;
             throw_new("java/io/FileNotFoundException", name);
             return V();
@@ -823,7 +836,6 @@ void init(void *hwnd, int width, int height) {
     g_height = height;
     build_tables();
     define_classes();
-    read_zip_dir(win::apk_path());
     g_activity = make<Obj>("com/doublefine/cq/CqActivity");
     g_assets = make<Obj>("android/content/res/AssetManager");
     g_surface = make<Obj>("android/view/Surface");
@@ -849,6 +861,18 @@ void *native(const char *c, const char *name) {
     return it == n.end() ? nullptr : it->second;
 }
 jclass find_class(const char *name) { return (jclass)cls(name); }
+
+bool open_apk(const std::string &path) {
+    g_apk_dir.clear();
+    g_assets_dir.clear();
+    return read_zip_dir(path);
+}
+bool apk_has(const char *name) { return g_apk_dir.count(name) != 0; }
+
+bool read_apk(const char *name, std::vector<uint8_t> &out) {
+    auto it = g_apk_dir.find(name);
+    return it != g_apk_dir.end() && read_entry(it->second, out);
+}
 }  // namespace fakejvm
 
 // ---- the game window as an ANativeWindow

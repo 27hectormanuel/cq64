@@ -12,6 +12,7 @@
 #include "../paths.h"
 
 #include <windows.h>
+#include <commdlg.h>
 #include <SDL2/SDL.h>
 #include <SDL2/SDL_syswm.h>
 #include <GLES2/gl2.h>
@@ -38,6 +39,14 @@ const char *const kGuestApk = "/data/app/com.doublefine.cq-1/base.apk";
 namespace {
 std::atomic<bool> g_shot_requested{false};
 std::atomic<int> g_win_w{1280}, g_win_h{720};
+}
+
+// The guest runtime (libguestrt.so) is built into cq64.exe (guest_rt.S).
+extern "C" const uint8_t cq_guest_rt_start[], cq_guest_rt_end[];
+bool builtin_lib(const char *soname, std::vector<uint8_t> &out) {
+    if (strcmp(soname, "libguestrt.so") != 0) return false;
+    out.assign(cq_guest_rt_start, cq_guest_rt_end);
+    return true;
 }
 
 // Screenshots of the game's own frame (F12, or a file named "screenshot" in the files directory):
@@ -198,23 +207,68 @@ void debug_input() {
     }
 }
 
+std::string pick_apk() {
+    char buf[MAX_PATH] = "";
+    OPENFILENAMEA o{};
+    o.lStructSize = sizeof o;
+    o.lpstrFilter = "Costume Quest for Android (*.apk)\0*.apk\0All files\0*.*\0";
+    o.lpstrFile = buf;
+    o.nMaxFile = sizeof buf;
+    o.lpstrTitle = "Select your Costume Quest APK";
+    o.Flags = OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST | OFN_NOCHANGEDIR;
+    return GetOpenFileNameA(&o) ? buf : "";
+}
+
+std::string read_line(const std::string &path) {
+    std::string r;
+    if (FILE *f = fopen(path.c_str(), "r")) {
+        char buf[MAX_PATH * 2] = "";
+        if (fgets(buf, sizeof buf, f)) r = buf;
+        fclose(f);
+    }
+    while (!r.empty() && (r.back() == '\n' || r.back() == '\r')) r.pop_back();
+    return r;
+}
+
+bool exists(const std::string &path) { return GetFileAttributesA(path.c_str()) != INVALID_FILE_ATTRIBUTES; }
+
+// The user's APK: dropped on cq64.exe (or passed), else the one used last time, else
+// CostumeQuest.apk next to cq64.exe, else chosen in a file dialog. Remembered in cq64-data/apk.txt.
+// Everything the game needs is read from it: its ARM libraries and its data.
+std::string choose_apk(int argc, char **argv, const std::string &dir) {
+    const std::string saved = dir + "/cq64-data/apk.txt";
+    std::string apk = argc > 1 ? argv[1] : read_line(saved);
+    if (!apk.empty() && !exists(apk)) apk.clear();
+    if (apk.empty() && exists(dir + "/CostumeQuest.apk")) apk = dir + "/CostumeQuest.apk";
+    for (;;) {
+        if (apk.empty()) apk = pick_apk();
+        if (apk.empty()) return "";  // cancelled
+        for (char &c : apk)
+            if (c == '\\') c = '/';
+        if (fakejvm::open_apk(apk) && fakejvm::apk_has("lib/armeabi-v7a/libCq.so")) break;
+        std::string msg = apk + "\n\nThis isn't Costume Quest for Android (it has no lib/armeabi-v7a/libCq.so). "
+                                "Choose the game's APK.";
+        SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_WARNING, "CQ64", msg.c_str(), nullptr);
+        apk.clear();
+    }
+    CreateDirectoryA((dir + "/cq64-data").c_str(), nullptr);
+    if (FILE *f = fopen(saved.c_str(), "w")) {
+        fprintf(f, "%s\n", apk.c_str());
+        fclose(f);
+    }
+    return apk;
+}
+
 int main(int argc, char **argv) {
     _set_fmode(_O_BINARY);  // the game's files are binary; never translate line endings
     const std::string dir = exe_dir();
-    win::g_apk = argc > 1 ? argv[1] : dir + "/CostumeQuest.apk";
-    for (char &c : win::g_apk)
-        if (c == '\\') c = '/';
     win::g_files = dir + "/cq64-data/files";
     cq_log_open((dir + "/cq64.log").c_str());
+    win::g_apk = choose_apk(argc, argv, dir);
+    if (win::g_apk.empty()) return 0;
 
     if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_GAMECONTROLLER | SDL_INIT_EVENTS | SDL_INIT_AUDIO) != 0) {
         LOGE("SDL_Init: %s", SDL_GetError());
-        return 1;
-    }
-    if (GetFileAttributesA(win::g_apk.c_str()) == INVALID_FILE_ATTRIBUTES) {
-        std::string msg = "Costume Quest's APK was not found:\n" + win::g_apk +
-                          "\n\nPut your CostumeQuest.apk next to cq64.exe, or pass its path.";
-        SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, "CQ64", msg.c_str(), nullptr);
         return 1;
     }
     int w = 1280, h = 720;

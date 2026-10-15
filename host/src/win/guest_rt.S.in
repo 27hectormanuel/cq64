@@ -1,0 +1,10 @@
+// SPDX-License-Identifier: CC0-1.0
+// Windows build: the guest runtime (libguestrt.so, ARM32 code built by guest/build.sh) built into
+// cq64.exe, so the program needs nothing but the user's APK. Configured by CMake (GUEST_RT).
+    .section .rdata,"dr"
+    .globl cq_guest_rt_start
+    .globl cq_guest_rt_end
+    .p2align 4
+cq_guest_rt_start:
+    .incbin "@GUEST_RT@"
+cq_guest_rt_end:

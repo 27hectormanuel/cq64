@@ -125,7 +125,17 @@ extern "C" JNIEXPORT jint JNI_OnLoad(JavaVM *vm, void *) {
     std::string dir = own_dir();
     std::vector<Module *> mods;
     for (auto &l : game::kLibs) {
+#ifdef _WIN32
+        // A file next to cq64.exe if present (development); else the runtime built into cq64.exe
+        // and the game's libraries straight from the APK.
+        std::vector<u8> image;
+        if (access((dir + "/" + l.file).c_str(), F_OK) == 0) image = read_file(dir + "/" + l.file);
+        else if (!win::builtin_lib(l.soname, image) && !fakejvm::read_apk((std::string("lib/armeabi-v7a/") + l.soname).c_str(), image))
+            fatal("%s is not in the APK (is it Costume Quest for Android?)", l.soname);
+        mods.push_back(loader::load(l.soname, image));
+#else
         mods.push_back(loader::load(l.soname, read_file(dir + "/" + l.file)));
+#endif
         if (mods.size() == 1) libc_host::init();  // needs the guest runtime's __sF
     }
     for (Module *m : mods) loader::run_init(m);

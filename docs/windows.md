@@ -31,10 +31,10 @@ pthread, GL and JNI bridges — packaged as a desktop program:
 ## Build (from Linux or WSL2)
 
 Needs what the Android build needs (the NDK for the guest runtime and headers, CMake + Ninja)
-plus `curl`, `unzip`, `zstd`:
+plus `curl`, `unzip`, `zip`, `zstd`. No APK is needed:
 
 ```sh
-scripts/build_win.sh CostumeQuest.apk           # or: ... original
+scripts/build_win.sh            # or: scripts/build_win.sh original
 ```
 
 `scripts/fetch_win_deps.sh` (run by `build_win.sh`) downloads, checksum-verified, into
@@ -43,9 +43,9 @@ scripts/build_win.sh CostumeQuest.apk           # or: ... original
 packages), and ANGLE from [Electron](https://github.com/electron/electron)'s official Windows
 release (Chromium's ANGLE build).
 
-The result is `out/windows/`: `cq64.exe`, its DLLs, the game's ARM libraries taken from your APK,
-and the licenses of the bundled DLLs. Copy your APK into that folder as `CostumeQuest.apk` (or
-pass its path: `cq64.exe D:\Games\CostumeQuest.apk`) and run `cq64.exe`. Saves and settings go to
-`cq64-data/` next to it; the log to `cq64.log`. F12 saves a screenshot (`screenshot.bmp`).
-
-As with the Android build, the output contains the game's own code — keep it to yourself.
+The result is `out/windows/` and `out/cq64-windows-<variant>.zip`: `cq64.exe` with the guest runtime
+(`libguestrt.so`, ARM code from `guest/`) built in via `src/win/guest_rt.S.in`, the SDL2/ANGLE DLLs,
+their licenses and a README. No game files: drag your APK onto `cq64.exe`; it reads the game's ARM
+libraries (`lib/armeabi-v7a/`) and data (`assets/`) from the APK each time and remembers the APK in
+`cq64-data/apk.txt`. Files named like the libraries next to `cq64.exe` (`libguest_Cq.so`, ...) take
+precedence, for development.
