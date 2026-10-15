@@ -333,22 +333,29 @@ static BOOL CALLBACK find_window(HWND w, LPARAM unused) {
     return FALSE;
 }
 
-// The game creates its window after startup; wait for it, then subclass it from its own thread
-// (a timer message handled by the subclass runs everything else on the game's main thread).
+// The game creates its window after startup; wait for it, then subclass it (a timer message
+// handled by the subclass runs everything else on the game's main thread). Then keep watching:
+// Cq.exe 1.0.0.11 destroys its first window during startup and makes a new one, so attach again
+// whenever the window is gone. (Re-subclassing a live window whose procedure the game replaced
+// crashed the game, so that is left alone.)
 static DWORD WINAPI attach(void *unused) {
-    for (int i = 0; i < 600 && !g_wnd; i++) {
-        Sleep(100);
+    for (int waited = 0;; Sleep(100)) {
+        if (g_wnd && IsWindow(g_wnd)) continue;
+        if (g_wnd) {
+            logf("window %p gone, looking again", (void *)g_wnd);
+            g_wnd = NULL;
+        }
         EnumWindows(find_window, 0);
+        if (!g_wnd) {
+            if (++waited == 600) logf("no game window found yet");
+            continue;
+        }
+        g_old_proc = (WNDPROC)SetWindowLongA(g_wnd, GWL_WNDPROC, (LONG)proc);
+        SetTimer(g_wnd, TIMER_ID, 200, NULL);
+        char title[128] = "";
+        GetWindowTextA(g_wnd, title, sizeof title);
+        logf("attached to window %p \"%s\"", (void *)g_wnd, title);
     }
-    if (!g_wnd) {
-        logf("no game window found");
-        return 0;
-    }
-    g_old_proc = (WNDPROC)SetWindowLongA(g_wnd, GWL_WNDPROC, (LONG)proc);
-    SetTimer(g_wnd, TIMER_ID, 200, NULL);
-    char title[128] = "";
-    GetWindowTextA(g_wnd, title, sizeof title);
-    logf("attached to window %p \"%s\"", (void *)g_wnd, title);
     return 0;
 }
 

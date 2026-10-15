@@ -301,7 +301,8 @@ framework (`testbase.lua`, `utils/testsystem.lua`), RoBert bot bases (`robertbas
 suburbs travel script, 33 files in all. The Linux binary still has `__dummy_testSetRoBertRunning`
 and `__dummy_testSetInputStreamType`.
 
-**They still run** (tested 2026-10-15 on GOG Linux, the same build as the disc's, recorded with
+**They still run** (tested 2026-10-15 on GOG Linux, the same build as the disc's, and on `Cq.exe`
+1.0.0.11 under Proton; the Linux runs were recorded with
 the console's record mode). `boot.lua` loads `Data/Test/Utils/TestSystem.lua` at start, so on
 these builds `CreateTestInstance`, `debug.RunTest`, `debug.StopAllTests` and RoBert's `test.*`
 functions exist from the title screen, and `loadfile('Data/Test/…')` reads from the pack. (On
@@ -329,9 +330,17 @@ Results:
 | Test | Result |
 |---|---|
 | `Bot.Walking` | Roams the streets and collects candy; walks into scripted battles, where it reports "Bot is stuck" |
-| `Bot.CostumeQuest` | Plays a new game by itself from the start to the Dorsilla battle in Fall Valley (where its script ends), winning fights with `cq.WinBattle()`. **Passed**, with 2,153 candy. Missions without a bot script are "cheat completed" (3 in that run). In an earlier run the game crashed in the mall instead; the cause is unknown |
+| `Bot.CostumeQuest` | Plays a new game by itself from the start to the Dorsilla battle in Fall Valley (where its script ends), winning fights with `cq.WinBattle()`. **Passed** on Linux, with 2,153 candy. Missions without a bot script are "cheat completed" (3 in that run) |
 
-Not yet tried on Windows 1.0.0.11.
+`Cq.exe` 1.0.0.11 gives the same results for the framework checks and `Bot.Walking`. The story bot
+**crashed the game** in two of three runs (once on Linux, once on Windows), both times at the same
+place: in the mall, right after the "Meet Lucy" scene loads (`TV_MeetLucy`, then
+`NPCKid_FakeLucy`). The run that got past it passed. So it looks like the bot (or a cheat-completed
+mission) rather than the platform; the cause is unknown.
+
+Under Proton, run `Cq.exe` windowed (`-window -width 960 -height 540`). Full screen at 1280×800 on
+a Steam Deck covered the screen, took the input and dropped to about 3 fps, so console commands
+took 30 s or more to run.
 
 ## 7. Open questions
 
@@ -345,8 +354,8 @@ Not yet tried on Windows 1.0.0.11.
   single player. It should: it only builds a network command while a game session is recording or
   playing back.
 - ~~Can the `Man_Tests` scripts (§6) be run from the console on the disc/GOG builds?~~ Yes on
-  Linux, with four stubs (§6). Windows 1.0.0.11 not yet tried, nor what crashed the game in the
-  mall in one story-bot run.
+  Linux and Windows 1.0.0.11, with four stubs (§6). Still open: what crashes the game in the mall
+  after "Meet Lucy" during the story bot.
 - LB + RB + A on the Steam `Cq.exe` (XInput hooked by ordinal) hasn't been tested in the game yet.
 
 ## Tools
