@@ -27,6 +27,8 @@ jobject activity();
 jobject asset_manager();
 jobject surface();
 jstring new_string(const char *utf8);
+jobject new_object(const char *cls);
+jobject new_direct_buffer(void *addr, jlong capacity);
 void set_window_size(int width, int height);
 
 // A native method registered with RegisterNatives (by JNI_OnLoad), or null.
@@ -39,5 +41,13 @@ template <class R = void, class... A> R call_static(const char *cls, const char 
     Fn fn = (Fn)native(cls, name);
     if (!fn) return R();
     return fn(env(), find_class(cls), a...);
+}
+
+// Calls a registered instance native on `self`.
+template <class R = void, class... A> R call(jobject self, const char *cls, const char *name, A... a) {
+    using Fn = R (*)(JNIEnv *, jobject, A...);
+    Fn fn = (Fn)native(cls, name);
+    if (!fn) return R();
+    return fn(env(), self, a...);
 }
 }  // namespace fakejvm

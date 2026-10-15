@@ -14,11 +14,19 @@ pthread, GL and JNI bridges — packaged as a desktop program:
 
 ## Status
 
-- Boots to the title screen and renders (tested under Wine/Proton with DXVK on a Steam Deck;
-  ~170 fps on the menus there).
-- **No sound yet**: FMOD's Android output is pulled by a Java thread (`FMODAudioDevice`), which
-  the stand-in VM doesn't run yet.
-- Mouse, keyboard and controller input are wired but barely tested. No developer menu.
+- Plays: title screen, menus, new game and the opening cutscenes render correctly (tested under
+  Wine/Proton with DXVK on a Steam Deck: ~170 fps on the menus, a steady 30 in game, the game's
+  own simulation rate).
+- **Sound**: FMOD's mixer is pulled by a thread in `win_main.cpp` (what `FMODAudioDevice` does on
+  Android) and played through SDL audio.
+- **Textures**: Costume Quest's data pack holds only ATC (Adreno) textures. The Windows build lists
+  ATC among the GPU's extensions and the host decodes those textures to RGBA8; without that the game
+  uploads them with an invalid format and the world draws black.
+- Input: the mouse acts as touch, keys as Android key codes, controllers go to the virtual pad
+  (optimized variant). Lightly tested. No developer menu yet.
+- Debugging: `cq64.log`; F12 or a file named `screenshot` in `cq64-data/files` saves the game's
+  own frame; a file named `input` there sends input (`key 66`, `tap 0.5 0.4`, `wait 500`, one per
+  line); `CQ64_DUMP_SHADERS=1` writes every shader the game compiles to `cq64-data/shaders`.
 
 ## Build (from Linux or WSL2)
 

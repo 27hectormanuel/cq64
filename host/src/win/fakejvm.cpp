@@ -835,6 +835,8 @@ jobject activity() { return (jobject)g_activity; }
 jobject asset_manager() { return (jobject)g_assets; }
 jobject surface() { return (jobject)g_surface; }
 jstring new_string(const char *utf8) { return (jstring)str(utf8); }
+jobject new_object(const char *c) { return (jobject)make<Obj>(c); }
+jobject new_direct_buffer(void *addr, jlong capacity) { return NewDirectByteBuffer(&g_env, addr, capacity); }
 void set_window_size(int width, int height) {
     g_width = width;
     g_height = height;

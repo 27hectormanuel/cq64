@@ -18,6 +18,7 @@
 #include <fcntl.h>
 
 #include <atomic>
+#include <map>
 #include <cstdlib>
 #include <vector>
 #include <string>
@@ -43,6 +44,10 @@ std::atomic<int> g_win_w{1280}, g_win_h{720};
 // saved as screenshot.bmp next to cq64.exe.
 void before_swap() {
     static int frame = 0;
+    // GL errors since the last frame (each code logged a few times): what ANGLE rejects.
+    static std::map<GLenum, int> errors;
+    for (GLenum e; (e = glGetError()) != GL_NO_ERROR;)
+        if (errors[e]++ < 3) LOGW("GL error 0x%x before frame %d", e, frame);
     if (++frame % 30 == 0 && access((g_files + "/screenshot").c_str(), F_OK) == 0) {
         unlink((g_files + "/screenshot").c_str());
         g_shot_requested = true;
@@ -118,6 +123,81 @@ struct Pad {
 };
 }  // namespace
 
+// FMODAudioDevice.run(): FMOD Ex on Android doesn't drive the sound card itself; a Java thread asks
+// the mixer for its format (fmodGetInfo), then pulls 16-bit stereo blocks (fmodProcess) and
+// writes them to an AudioTrack whose blocking write paces the loop. Here they go to an SDL audio
+// queue kept about as deep as FMOD's own buffers.
+void fmod_audio() {
+    constexpr const char *FMOD = "org/fmod/FMODAudioDevice";
+    enum { INFO_SAMPLERATE, INFO_DSPBUFFERLENGTH, INFO_DSPNUMBUFFERS, INFO_MIXERRUNNING };
+    jobject device = fakejvm::new_object(FMOD);
+    auto info = [&](jint what) { return fakejvm::call<jint>(device, FMOD, "fmodGetInfo", what); };
+    for (;;) {
+        jint rate = info(INFO_SAMPLERATE), frames = info(INFO_DSPBUFFERLENGTH), count = info(INFO_DSPNUMBUFFERS);
+        if (rate <= 0 || frames <= 0 || count <= 0) {
+            SDL_Delay(100);
+            continue;
+        }
+        const u32 bytes = (u32)frames * 2 * 2;
+        // In guest memory, so the game's GetDirectBufferAddress needs no copy.
+        u32 gbuf = mem::halloc(bytes, 16);
+        jobject buffer = fakejvm::new_direct_buffer(g2h(gbuf), bytes);
+        SDL_AudioSpec want{}, have{};
+        want.freq = rate;
+        want.format = AUDIO_S16LSB;
+        want.channels = 2;
+        want.samples = (Uint16)frames;
+        SDL_AudioDeviceID dev = SDL_OpenAudioDevice(nullptr, 0, &want, &have, 0);
+        if (!dev) {
+            LOGE("audio: %s", SDL_GetError());
+            return;
+        }
+        LOGI("audio: FMOD mixer %d Hz, %d x %d frames", rate, count, frames);
+        SDL_PauseAudioDevice(dev, 0);
+        while (info(INFO_MIXERRUNNING) == 1) {
+            while (SDL_GetQueuedAudioSize(dev) > bytes * (u32)count) SDL_Delay(1);
+            fakejvm::call<jint>(device, FMOD, "fmodProcess", buffer);
+            SDL_QueueAudio(dev, g2h(gbuf), bytes);
+        }
+        LOGI("audio: FMOD mixer stopped");
+        SDL_CloseAudioDevice(dev);
+        mem::hfree(gbuf);
+    }
+}
+
+// Test input without a keyboard or mouse: lines in files/input such as "key 66" (an Android key
+// code, pressed and released), "tap 0.5 0.4" (a touch at that fraction of the window) or
+// "wait 500" (milliseconds).
+void debug_input() {
+    const std::string path = win::files_dir() + "/input";
+    for (;;) {
+        SDL_Delay(200);
+        FILE *f = fopen(path.c_str(), "r");
+        if (!f) continue;
+        std::vector<std::string> lines;
+        char line[256];
+        while (fgets(line, sizeof line, f)) lines.push_back(line);
+        fclose(f);
+        unlink(path.c_str());
+        for (const std::string &l : lines) {
+            int k, ms;
+            float x, y;
+            if (sscanf(l.c_str(), "key %d", &k) == 1) {
+                fakejvm::call_static<void>(SDLA, "onNativeKeyDown", (jint)k);
+                SDL_Delay(120);
+                fakejvm::call_static<void>(SDLA, "onNativeKeyUp", (jint)k);
+            } else if (sscanf(l.c_str(), "tap %f %f", &x, &y) == 2) {
+                fakejvm::call_static<void>(SDLA, "onNativeTouch", (jint)0, (jint)0, (jint)0, (jfloat)x, (jfloat)y, 1.0f);
+                SDL_Delay(120);
+                fakejvm::call_static<void>(SDLA, "onNativeTouch", (jint)0, (jint)0, (jint)1, (jfloat)x, (jfloat)y, 1.0f);
+            } else if (sscanf(l.c_str(), "wait %d", &ms) == 1) {
+                SDL_Delay(ms);
+            }
+            SDL_Delay(300);
+        }
+    }
+}
+
 int main(int argc, char **argv) {
     _set_fmode(_O_BINARY);  // the game's files are binary; never translate line endings
     const std::string dir = exe_dir();
@@ -127,7 +207,7 @@ int main(int argc, char **argv) {
     win::g_files = dir + "/cq64-data/files";
     cq_log_open((dir + "/cq64.log").c_str());
 
-    if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_GAMECONTROLLER | SDL_INIT_EVENTS) != 0) {
+    if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_GAMECONTROLLER | SDL_INIT_EVENTS | SDL_INIT_AUDIO) != 0) {
         LOGE("SDL_Init: %s", SDL_GetError());
         return 1;
     }
@@ -172,6 +252,9 @@ int main(int argc, char **argv) {
         e.type = SDL_QUIT;
         SDL_PushEvent(&e);
     }).detach();
+
+    std::thread(fmod_audio).detach();
+    std::thread(debug_input).detach();
 
     Pad pad;
     bool mouse_down = false;

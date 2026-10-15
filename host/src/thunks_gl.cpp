@@ -2,6 +2,7 @@
 // OpenGL ES 1.x / 2.0 imports. Arguments are mostly scalars; pointer arguments are guest
 // addresses, except vertex/index "pointers" that are buffer offsets while a VBO is bound.
 #include "abi.h"
+#include "game.h"
 
 #define GL_GLEXT_PROTOTYPES 1
 #include <GLES/gl.h>
@@ -9,6 +10,7 @@
 #include <GLES2/gl2.h>
 
 #include <algorithm>
+#include <atomic>
 #include <mutex>
 #include <unordered_map>
 #include <vector>
@@ -69,13 +71,36 @@ u32 t_glGetString(GLenum name) {
     const char *s = (const char *)glGetString(name);
     if (!s) return 0;
     LOGI("glGetString(0x%x) = %s", name, s);
-    return g_strings[name] = mem::hstrdup(s);
+    std::string v = s;
+#ifdef _WIN32
+    // ATC (Adreno) textures are decoded to RGBA8 below when the GPU lacks them. Costume Quest's
+    // data pack has only ATC textures; without ATC in this list the game uploads them as
+    // "compressed GL_RGBA", which ANGLE rejects, and the world draws black.
+    if (name == GL_EXTENSIONS && !strstr(s, "GL_AMD_compressed_ATC_texture")) v += " GL_AMD_compressed_ATC_texture";
+#endif
+    return g_strings[name] = mem::hstrdup(v.c_str());
 }
 THUNK(glGetString, t_glGetString);
 
 void t_glShaderSource(GLuint sh, GLsizei count, G<const u32> strs, G<const GLint> lens) {
     std::vector<const char *> v(count);
     for (GLsizei i = 0; i < count; i++) v[i] = (const char *)g2h(strs.get()[i]);
+#ifdef _WIN32
+    // CQ64_DUMP_SHADERS=1: every shader the game compiles, to cq64-data/shaders/<id>.glsl.
+    static const bool dump = getenv("CQ64_DUMP_SHADERS") != nullptr;
+    if (dump) {
+        static std::atomic<int> n{0};
+        std::string dir = game::files_dir() + "/../shaders";
+        mkdir(dir.c_str(), 0700);
+        if (FILE *f = fopen((dir + "/" + std::to_string(n++) + "_" + std::to_string(sh) + ".glsl").c_str(), "w")) {
+            for (GLsizei i = 0; i < count; i++) {
+                if (lens && lens.get()[i] >= 0) fwrite(v[i], 1, lens.get()[i], f);
+                else fputs(v[i], f);
+            }
+            fclose(f);
+        }
+    }
+#endif
     glShaderSource(sh, count, v.data(), lens);
 }
 THUNK(glShaderSource, t_glShaderSource);
@@ -142,7 +167,20 @@ void t_glClearDepthf(float d) { glClearDepthf(d); } THUNK(glClearDepthf, t_glCle
 void t_glClearStencil(GLint s) { glClearStencil(s); } THUNK(glClearStencil, t_glClearStencil);
 void t_glColor4f(float r, float g, float b, float a) { glColor4f(r, g, b, a); } THUNK(glColor4f, t_glColor4f);
 void t_glColorMask(GLboolean r, GLboolean g, GLboolean b, GLboolean a) { glColorMask(r, g, b, a); } THUNK(glColorMask, t_glColorMask);
-void t_glCompileShader(GLuint s) { glCompileShader(s); } THUNK(glCompileShader, t_glCompileShader);
+void t_glCompileShader(GLuint s) {
+    glCompileShader(s);
+#ifdef _WIN32  // shaders ANGLE's translation rejects (on Android, asking right away would stall)
+    GLint ok = GL_TRUE;
+    glGetShaderiv(s, GL_COMPILE_STATUS, &ok);
+    if (!ok) {
+        char log[2048] = "";
+        glGetShaderInfoLog(s, sizeof log, nullptr, log);
+        static std::atomic<int> shown{0};
+        if (shown++ < 20) LOGW("shader %u failed to compile: %s", s, log);
+    }
+#endif
+}
+THUNK(glCompileShader, t_glCompileShader);
 // ---- ATC (ATI/AMD texture compression) fallback
 // Some games ship only ATC textures (GL_AMD_compressed_ATC_texture, Qualcomm Adreno only). On
 // other GPUs they are decoded to RGBA8 here and uploaded uncompressed.
@@ -278,7 +316,20 @@ GLint t_glGetUniformLocation(GLuint p, P(const char) n) { return glGetUniformLoc
 GLboolean t_glIsFramebuffer(GLuint f) { return glIsFramebuffer(f); } THUNK(glIsFramebuffer, t_glIsFramebuffer);
 GLboolean t_glIsRenderbuffer(GLuint r) { return glIsRenderbuffer(r); } THUNK(glIsRenderbuffer, t_glIsRenderbuffer);
 void t_glLineWidth(float w) { glLineWidth(w); } THUNK(glLineWidth, t_glLineWidth);
-void t_glLinkProgram(GLuint p) { glLinkProgram(p); } THUNK(glLinkProgram, t_glLinkProgram);
+void t_glLinkProgram(GLuint p) {
+    glLinkProgram(p);
+#ifdef _WIN32
+    GLint ok = GL_TRUE;
+    glGetProgramiv(p, GL_LINK_STATUS, &ok);
+    if (!ok) {
+        char log[2048] = "";
+        glGetProgramInfoLog(p, sizeof log, nullptr, log);
+        static std::atomic<int> shown{0};
+        if (shown++ < 20) LOGW("program %u failed to link: %s", p, log);
+    }
+#endif
+}
+THUNK(glLinkProgram, t_glLinkProgram);
 void t_glLoadIdentity() { glLoadIdentity(); } THUNK(glLoadIdentity, t_glLoadIdentity);
 void t_glMatrixMode(GLenum m) { glMatrixMode(m); } THUNK(glMatrixMode, t_glMatrixMode);
 void t_glOrthof(float l, float r, float b, float t, float n, float f) { glOrthof(l, r, b, t, n, f); } THUNK(glOrthof, t_glOrthof);
