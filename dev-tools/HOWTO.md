@@ -6,7 +6,7 @@ what each build kept: [RESEARCH.md](RESEARCH.md). No game files are here; bring 
 | Build | Get it | Open the console |
 |---|---|---|
 | **Costume Quest Mobile for Windows** (this repo, runs the Android game) | Release *Dev Console testing*: `CostumeQuestMobile-optimized.zip` or `-original.zip` | F1, `` ` `` or LB + RB + A |
-| **Official Windows** `Cq.exe` 1.0.0.11 (SHA-256 `9d5acea0…addef8`) | Release: `dinput8.dll` | F1, `` ` `` or LB + RB + A |
+| **Official Windows** `Cq.exe`: 1.0.0.11 (SHA-256 `9d5acea0…addef8`) or the current Steam build (`d9e1ee3e…b46cf`) | Release: `dinput8.dll` | F1, `` ` `` or LB + RB + A |
 | **Official Linux** GOG 2.0.0.3 `Cq.bin.x86` (SHA-256 `7104dc7d…5100ef`) | Release: `cqconsole-linux.zip` | F1, `` ` `` or LB + RB + A |
 
 With a controller only (Steam Deck), open the console with LB + RB + A, then type on the on-screen
@@ -47,8 +47,10 @@ line); `cq64-data/files/input` takes `sdlkey F1`, `type <text>`, `sdlkey Return`
 ## Official Windows release (`Cq.exe`)
 
 1. Copy `dinput8.dll` into the game folder, next to `Cq.exe`. The game loads it by itself.
-2. **Wine / Proton / Steam Deck only:** also set `WINEDLLOVERRIDES=dinput8=n,b`. On Steam that
-   goes in the launch options: `WINEDLLOVERRIDES=dinput8=n,b %command%`.
+   On Steam: right-click Costume Quest → Manage → Browse local files.
+2. **Windows:** nothing else to set. Start the game as usual (from Steam or `Cq.exe`).
+   **Wine / Proton / Steam Deck only:** also set `WINEDLLOVERRIDES=dinput8=n,b`. On Steam that
+   goes in the launch options: `WINEDLLOVERRIDES="dinput8=n,b" %command%`.
 3. Start the game and press F1. This is the game's own console: small white text at the bottom
    left, and lines fade after a few seconds, as the developers had it.
 

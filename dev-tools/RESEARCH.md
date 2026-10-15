@@ -37,6 +37,7 @@ What the tests showed beyond the research:
 | Binary | Size | MD5 | SHA-256 | Notes |
 |---|---|---|---|---|
 | `Cq.exe` (Windows) | 7,294,464 | `d9919c991cafb27ec1e758d68094d622` | `9d5acea0f5da7686e1c2135de00ece8544fc6e3d7cc5c345538963fee3addef8` | PE32 i386, MSVC 2008 (`MSVCR90`), FileVersion 1.0.0.11, stripped, Direct3D 9 |
+| `Cq.exe` (Windows, Steam, Jan 2026) | 7,289,344 | `6f739759617989691663f9273e72c969` | `d9e1ee3e7e78ae80b85f51b941b4d27beb7a205312507452cc8718aeb2bb46cf` | Same code, rebuilt: functions moved by +0x420, globals by −0x1900 (table below). No SteamStub wrapper. Imports `XINPUT1_3.dll` instead of `XINPUT9_1_0.dll` |
 | `Cq.bin.x86` (Linux, GOG 2.0.0.3) | 21,868,972 | `dbca5c51b7584e5dfd430a86c166fab9` | `7104dc7db2e5a9bc30cfebbacb34656072a8aed4d5b86515208ba93e3d5100ef` | ELF i386, GCC, **not stripped** (59,823 symbols), SDL2 + desktop OpenGL, bundled FMOD 4.42.16 |
 | `libCq.so` (Android 1.1.7) | 12,907,304 | `52e0a8bd49fa2602dd9bdfe24df47020` | | ARM32, symbols exported |
 
@@ -184,6 +185,19 @@ own console can do the rest.
 `lua_pcall 0x755760`, `lua_tolstring 0x754e10`, `lua_pushboolean 0x7551e0`. Also
 `luaapp_ToggleConsoleSpam 0x565b50`, `luaapp_IsConsoleSpamEnabled 0x565b70`, console creation
 `0x564ce0` (0x98-byte object) and destruction around `0x5610ca`.
+
+**Steam build (Jan 2026).** Found by matching the 1.0.0.11 functions byte for byte, with
+absolute addresses masked out. The console object's layout didn't change.
+
+| What | 1.0.0.11 | Steam |
+|---|---|---|
+| `g_pConsole` | `0xa915b8` | `0xa8fcb8` |
+| Console font | `0xa9124c` | `0xa8f94c` |
+| `Console::ExecuteCommand` | `0x565150` | `0x565570` |
+| `QueueCommand` | `0x564f00` | `0x565320` |
+| `luaapp_ToggleConsoleSpam` | `0x565b50` | `0x565f70` |
+
+The DLL checks the bytes of both builds and uses whichever matches.
 
 **First test:** with the DLL, set `console+0x10 = 1` and type nothing. If the D3D font exists,
 `> _` appears at the bottom of the screen. That one byte tells whether the original console UI

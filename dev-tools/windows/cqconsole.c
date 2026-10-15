@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: CC0-1.0
 // Debug console for the official Windows release of Costume Quest (Cq.exe 1.0.0.11, SHA-256
-// 9d5acea0...addef8). Built as dinput8.dll and placed next to Cq.exe, which imports DINPUT8.dll and
+// 9d5acea0...addef8, and the current Steam build, d9e1ee3e...b46cf). Built as dinput8.dll and placed next to Cq.exe, which imports DINPUT8.dll and
 // so loads this first; DirectInput8Create is passed on to the system's dinput8.dll.
 //
 // The retail game kept its Lua console (Console::ExecuteCommand) and the code that draws it
@@ -31,25 +31,36 @@
 #define WM_CONSOLE_TOGGLE (WM_APP + 0x51)  // posted by the controller hook
 
 // ---- addresses in Cq.exe (see docs/debug-console-pc.md) ----------------------------------------
-#define G_CONSOLE ((char **)0xa915b8)         // Console *g_pConsole
-#define EXECUTE_COMMAND 0x565150              // Console::ExecuteCommand: EAX = String*, stack: console, playerIndex
-#define G_FONT ((void **)0xa9124c)            // the console's font (drawn only when non-null)
+// Two builds are known: the retail 1.0.0.11 (SHA-256 9d5acea0...addef8) and the current Steam build
+// (d9e1ee3e...b46cf, Jan 2026), where code moved by +0x420 and globals by -0x1900.
+static const struct build {
+    const char *name;
+    DWORD console, execute, font;  // Console *g_pConsole, Console::ExecuteCommand, the console's font
+    struct {
+        DWORD addr;
+        unsigned char bytes[8];
+        int n;
+    } check[3];
+} kBuilds[] = {
+    {"Cq.exe 1.0.0.11", 0xa915b8, 0x565150, 0xa9124c,
+     {{0x565150, {0x83, 0xec, 0x14, 0x53, 0x8b, 0x5c, 0x24, 0x1c}, 8},  // ExecuteCommand: sub esp,14h; push ebx; mov ebx,[esp+1Ch]
+      {0x564f00, {0x55, 0x8b, 0x2d, 0xb8, 0x15, 0xa9, 0x00}, 7},  // QueueCommand: push ebp; mov ebp,[g_pConsole]
+      {0x565b50, {0xa1, 0xb8, 0x15, 0xa9, 0x00}, 5}}},            // luaapp_ToggleConsoleSpam: mov eax,[g_pConsole]
+    {"Cq.exe (Steam, 2026)", 0xa8fcb8, 0x565570, 0xa8f94c,
+     {{0x565570, {0x83, 0xec, 0x14, 0x53, 0x8b, 0x5c, 0x24, 0x1c}, 8},
+      {0x565320, {0x55, 0x8b, 0x2d, 0xb8, 0xfc, 0xa8, 0x00}, 7},
+      {0x565f70, {0xa1, 0xb8, 0xfc, 0xa8, 0x00}, 5}}},
+};
+static const struct build *g_build;
+#define G_CONSOLE ((char **)g_build->console)
+#define EXECUTE_COMMAND (g_build->execute)    // Console::ExecuteCommand: EAX = String*, stack: console, playerIndex
+#define G_FONT ((void **)g_build->font)       // the console's font (drawn only when non-null)
 #define C_ACTIVE 0x10
 #define C_CURSOR 0x1c
 #define C_LOCK 0x28                           // CRITICAL_SECTION guarding the lines
 #define C_LINES 0x50                          // Array<ConsoleLine>: count<<6 | flags, capacity, data
 #define C_INPUT 0x5c                          // Array<char>: count<<6 | flags, capacity, data
 #define LINE_SIZE 0x24                        // ConsoleLine: String text, float seconds, bool keep, Color
-
-static const struct {
-    DWORD addr;
-    unsigned char bytes[8];
-    int n;
-} kCheck[] = {
-    {0x565150, {0x83, 0xec, 0x14, 0x53, 0x8b, 0x5c, 0x24, 0x1c}, 8},  // ExecuteCommand: sub esp,14h; push ebx; mov ebx,[esp+1Ch]
-    {0x564f00, {0x55, 0x8b, 0x2d, 0xb8, 0x15, 0xa9, 0x00}, 7},  // QueueCommand: push ebp; mov ebp,[g_pConsole]
-    {0x565b50, {0xa1, 0xb8, 0x15, 0xa9, 0x00}, 5},              // luaapp_ToggleConsoleSpam: mov eax,[g_pConsole]
-};
 
 static FILE *g_log;
 static char g_dir[MAX_PATH];
@@ -485,12 +496,21 @@ EXPORT HRESULT WINAPI DirectInput8Create(HINSTANCE inst, DWORD ver, REFIID id, v
 static int right_exe(void) {
     char *base = (char *)GetModuleHandleA(NULL);
     if ((DWORD)base != 0x400000) return 0;
-    for (size_t i = 0; i < sizeof kCheck / sizeof kCheck[0]; i++)
-        if (kCheck[i].n && memcmp((void *)kCheck[i].addr, kCheck[i].bytes, kCheck[i].n)) {
-            logf("unexpected bytes at 0x%lx: not Cq.exe 1.0.0.11", kCheck[i].addr);
-            return 0;
+    IMAGE_NT_HEADERS *nt = (IMAGE_NT_HEADERS *)(base + ((IMAGE_DOS_HEADER *)base)->e_lfanew);
+    DWORD end = 0x400000 + nt->OptionalHeader.SizeOfImage;
+    for (size_t b = 0; b < sizeof kBuilds / sizeof kBuilds[0]; b++) {
+        int ok = 1;
+        for (int i = 0; i < 3 && ok; i++)
+            ok = kBuilds[b].check[i].addr + 8 <= end &&
+                 !memcmp((void *)kBuilds[b].check[i].addr, kBuilds[b].check[i].bytes, kBuilds[b].check[i].n);
+        if (ok) {
+            g_build = &kBuilds[b];
+            logf("game: %s", g_build->name);
+            return 1;
         }
-    return 1;
+    }
+    logf("unexpected code: not a known Cq.exe build, console off");
+    return 0;
 }
 
 BOOL WINAPI DllMain(HINSTANCE inst, DWORD reason, void *unused) {
@@ -505,6 +525,7 @@ BOOL WINAPI DllMain(HINSTANCE inst, DWORD reason, void *unused) {
     logf("Costume Quest debug console: ` or F1 opens it");
     hook_one("d3d9.dll", "Direct3DCreate9", (void *)my_create9, (void **)&g_create9);
     hook_one("XINPUT9_1_0.dll", "XInputGetState", (void *)my_xinput_get_state, (void **)&g_xinput_get_state);
+    hook_one("XINPUT1_3.dll", "XInputGetState", (void *)my_xinput_get_state, (void **)&g_xinput_get_state);  // Steam build
     CreateThread(NULL, 0, attach, NULL, 0, NULL);
     return TRUE;
 }
