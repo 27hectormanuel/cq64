@@ -272,13 +272,19 @@ int main(int argc, char **argv) {
         return 1;
     }
     int w = 1280, h = 720;
-    SDL_Window *window = SDL_CreateWindow("Costume Quest", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, w, h,
-                                          SDL_WINDOW_SHOWN);
+    SDL_Window *window = SDL_CreateWindow("Costume Quest Mobile", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, w,
+                                          h, SDL_WINDOW_SHOWN);
     SDL_SysWMinfo info;
     SDL_VERSION(&info.version);
     if (!window || !SDL_GetWindowWMInfo(window, &info)) {
         LOGE("window: %s", SDL_GetError());
         return 1;
+    }
+    // The program's icon (resource 1, if built with one) for the title bar and taskbar.
+    for (int big : {1, 0}) {
+        int px = GetSystemMetrics(big ? SM_CXICON : SM_CXSMICON);
+        if (HANDLE ico = LoadImageA(GetModuleHandleA(nullptr), MAKEINTRESOURCEA(1), IMAGE_ICON, px, px, 0))
+            SendMessageA(info.info.win.window, WM_SETICON, big ? ICON_BIG : ICON_SMALL, (LPARAM)ico);
     }
     LOGI("cq64 for Windows: APK %s, files %s", win::g_apk.c_str(), win::g_files.c_str());
 

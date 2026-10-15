@@ -1,6 +1,6 @@
 # Windows build (proof of concept)
 
-`cq64.exe` runs Costume Quest's Android version on Windows **without an Android emulator**. It is
+`Costume Quest Mobile.exe` runs Costume Quest's Android version on Windows **without an Android emulator**. It is
 the same host as the Android build — dynarmic translating the game's 32-bit ARM code, the libc,
 pthread, GL and JNI bridges — packaged as a desktop program:
 
@@ -19,9 +19,11 @@ pthread, GL and JNI bridges — packaged as a desktop program:
   own simulation rate).
 - **Sound**: FMOD's mixer is pulled by a thread in `win_main.cpp` (what `FMODAudioDevice` does on
   Android) and played through SDL audio.
-- **Textures**: Costume Quest's data pack holds only ATC (Adreno) textures. The Windows build lists
-  ATC among the GPU's extensions and the host decodes those textures to RGBA8; without that the game
-  uploads them with an invalid format and the world draws black.
+- **Textures**: any of the four GPU-specific APKs works (Adreno, Mali, PowerVR, Tegra; see
+  [apk-variants.md](apk-variants.md)). The extension list shown to the game adds ATC and PVRTC,
+  which the host decodes to RGBA8, and the standard S3TC names (ANGLE has DXT1/3/5); without them
+  the game uploads those textures with an invalid format and the world draws black.
+  `CQ64_GL_STATS=1` logs the texture formats the game uploads.
 - Input: the mouse acts as touch, keys as Android key codes, controllers go to the virtual pad
   (optimized variant). Lightly tested. No developer menu yet.
 - Debugging: `cq64.log`; F12 or a file named `screenshot` in `cq64-data/files` saves the game's
@@ -43,9 +45,9 @@ scripts/build_win.sh            # or: scripts/build_win.sh original
 packages), and ANGLE from [Electron](https://github.com/electron/electron)'s official Windows
 release (Chromium's ANGLE build).
 
-The result is `out/windows/` and `out/cq64-windows-<variant>.zip`: `cq64.exe` with the guest runtime
+The result is `out/windows/` and `out/cq64-windows-<variant>.zip`: `Costume Quest Mobile.exe` with the guest runtime
 (`libguestrt.so`, ARM code from `guest/`) built in via `src/win/guest_rt.S.in`, the SDL2/ANGLE DLLs,
-their licenses and a README. No game files: drag your APK onto `cq64.exe`; it reads the game's ARM
+their licenses and a README. No game files: drag your APK onto `Costume Quest Mobile.exe`; it reads the game's ARM
 libraries (`lib/armeabi-v7a/`) and data (`assets/`) from the APK each time and remembers the APK in
-`cq64-data/apk.txt`. Files named like the libraries next to `cq64.exe` (`libguest_Cq.so`, ...) take
+`cq64-data/apk.txt`. Files named like the libraries next to `Costume Quest Mobile.exe` (`libguest_Cq.so`, ...) take
 precedence, for development.

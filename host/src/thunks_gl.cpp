@@ -77,6 +77,13 @@ u32 t_glGetString(GLenum name) {
     // data pack has only ATC textures; without ATC in this list the game uploads them as
     // "compressed GL_RGBA", which ANGLE rejects, and the world draws black.
     if (name == GL_EXTENSIONS && !strstr(s, "GL_AMD_compressed_ATC_texture")) v += " GL_AMD_compressed_ATC_texture";
+    // Likewise PVRTC (the PowerVR build), decoded below. And ANGLE does support DXT1/3/5 but only
+    // names them GL_EXT_texture_compression_dxt1 and GL_ANGLE_texture_compression_dxt3/5; with the
+    // standard names the game uploads its DXT5 textures (the Tegra build) as DXT5 instead of ATC.
+    if (name == GL_EXTENSIONS && !strstr(s, "GL_IMG_texture_compression_pvrtc")) v += " GL_IMG_texture_compression_pvrtc";
+    if (name == GL_EXTENSIONS && strstr(s, "GL_EXT_texture_compression_dxt1") && strstr(s, "GL_ANGLE_texture_compression_dxt5") &&
+        !strstr(s, "GL_EXT_texture_compression_s3tc "))
+        v += " GL_EXT_texture_compression_s3tc GL_NV_texture_compression_s3tc";
 #endif
     return g_strings[name] = mem::hstrdup(v.c_str());
 }
@@ -181,6 +188,27 @@ void t_glCompileShader(GLuint s) {
 #endif
 }
 THUNK(glCompileShader, t_glCompileShader);
+#ifdef _WIN32
+// CQ64_GL_STATS=1: texture uploads counted by GL format, logged every 500 uploads.
+void tex_stat(const char *kind, GLenum format) {
+    static const bool on = getenv("CQ64_GL_STATS") != nullptr;
+    if (!on) return;
+    static std::mutex lock;
+    static std::unordered_map<std::string, int> counts;
+    static int total = 0;
+    std::lock_guard<std::mutex> lk(lock);
+    char key[48];
+    snprintf(key, sizeof key, "%s 0x%x", kind, format);
+    counts[key]++;
+    if (++total % 500 == 0) {
+        std::string out;
+        for (auto &[k, c] : counts) out += " [" + k + "]=" + std::to_string(c);
+        LOGI("texture uploads after %d:%s", total, out.c_str());
+    }
+}
+#else
+inline void tex_stat(const char *, GLenum) {}
+#endif
 // ---- ATC (ATI/AMD texture compression) fallback
 // Some games ship only ATC textures (GL_AMD_compressed_ATC_texture, Qualcomm Adreno only). On
 // other GPUs they are decoded to RGBA8 here and uploaded uncompressed.
@@ -253,7 +281,128 @@ std::vector<u8> atc_decode(GLenum f, int w, int h, const u8 *src) {
     return out;
 }
 
+// ---- PVRTC (PowerVR texture compression, version 1) fallback
+// The PowerVR builds of some games ship PVRTC textures (GL_IMG_texture_compression_pvrtc, PowerVR
+// GPUs only). On other GPUs they are decoded to RGBA8 here. Each 64-bit block covers 4x4 (4 bpp) or
+// 8x4 (2 bpp) pixels and holds two low-resolution colours, A and B, plus per-pixel modulation
+// weights; A and B are bilinearly upscaled from the four nearest block centres. Blocks are stored
+// in Morton (Z) order.
+constexpr GLenum PVRTC_RGB_4BPP = 0x8C00, PVRTC_RGB_2BPP = 0x8C01, PVRTC_RGBA_4BPP = 0x8C02, PVRTC_RGBA_2BPP = 0x8C03;
+bool is_pvrtc(GLenum f) { return f == PVRTC_RGB_4BPP || f == PVRTC_RGB_2BPP || f == PVRTC_RGBA_4BPP || f == PVRTC_RGBA_2BPP; }
+bool gpu_has_pvrtc() {
+    static const bool has = [] {
+        const char *e = (const char *)glGetString(GL_EXTENSIONS);
+        return e && strstr(e, "GL_IMG_texture_compression_pvrtc");
+    }();
+    return has;
+}
+u32 pvrtc_twiddle(u32 bw, u32 bh, u32 x, u32 y) {
+    u32 min_dim = std::min(bw, bh), rest = bh < bw ? x : y, out = 0, shift = 0;
+    for (u32 bit = 1; bit < min_dim; bit <<= 1, shift++) {
+        if (y & bit) out |= 1u << (2 * shift);
+        if (x & bit) out |= 2u << (2 * shift);
+    }
+    return out | ((rest >> shift) << (2 * shift));
+}
+// A block colour as 8-bit RGBA. B is bits 16..31 of the colour word; A is bits 0..15 (its lowest
+// bit is the block's modulation mode, so A has one bit less blue).
+void pvrtc_colour(u32 c, bool is_b, u8 out[4]) {
+    u32 r, g, b, a;
+    if (c & 0x8000) {  // opaque: 5:5:5 (A: 5:5:4)
+        r = (c >> 10) & 31, g = (c >> 5) & 31, b = is_b ? c & 31 : ((c & 0x1e) | ((c >> 4) & 1)), a = 15;
+    } else {  // translucent: 3-bit alpha, 4:4:4 (A: 4:4:3)
+        r = ((c >> 7) & 0x1e) | ((c >> 11) & 1);
+        g = ((c >> 3) & 0x1e) | ((c >> 7) & 1);
+        b = is_b ? (((c << 1) & 0x1e) | ((c >> 3) & 1)) : (((c << 2) & 0x1c) | ((c >> 1) & 3));
+        a = (c >> 11) & 0xe;
+    }
+    out[0] = (u8)((r << 3) | (r >> 2)), out[1] = (u8)((g << 3) | (g >> 2)), out[2] = (u8)((b << 3) | (b >> 2));
+    out[3] = (u8)((a << 4) | a);
+}
+std::vector<u8> pvrtc_decode(GLenum f, int w, int h, const u8 *src) {
+    const bool two = f == PVRTC_RGB_2BPP || f == PVRTC_RGBA_2BPP;
+    const int bx = two ? 8 : 4, by = 4;
+    const int pw = std::max(w, two ? 16 : 8), ph = std::max(h, 8);  // the format's minimum size
+    const u32 nbx = pw / bx, nby = ph / by;
+    std::vector<u8> cola(nbx * nby * 4), colb(nbx * nby * 4);
+    std::vector<s8> mod(pw * ph), mode(pw * ph);  // raw modulation codes and per-pixel mode
+    for (u32 j = 0; j < nby; j++)
+        for (u32 i = 0; i < nbx; i++) {
+            const u8 *blk = src + 8 * pvrtc_twiddle(nbx, nby, i, j);
+            u32 m = blk[0] | blk[1] << 8 | blk[2] << 16 | (u32)blk[3] << 24;
+            u32 c = blk[4] | blk[5] << 8 | blk[6] << 16 | (u32)blk[7] << 24;
+            pvrtc_colour(c & 0xffff, false, &cola[(j * nbx + i) * 4]);
+            pvrtc_colour(c >> 16, true, &colb[(j * nbx + i) * 4]);
+            int md = c & 1;
+            if (two && md) {  // 2 bpp, interpolated modulation: which interpolation, from the data
+                if (m & 1) {
+                    md = (m & (1u << 20)) ? 3 : 2;  // vertical only / horizontal only
+                    if (m & (1u << 21)) m |= 1u << 20; else m &= ~(1u << 20);
+                }
+                if (m & 2) m |= 1; else m &= ~1u;
+            }
+            for (int y = 0; y < by; y++)
+                for (int x = 0; x < bx; x++) {
+                    int p = (j * by + y) * pw + i * bx + x;
+                    mode[p] = (s8)md;
+                    if (!two) {
+                        mod[p] = (s8)(m & 3), m >>= 2;
+                    } else if (!md) {
+                        mod[p] = (m & 1) ? 3 : 0, m >>= 1;
+                    } else if (((x ^ y) & 1) == 0) {
+                        mod[p] = (s8)(m & 3), m >>= 2;
+                    }
+                }
+        }
+    static const int rep[4] = {0, 3, 5, 8};
+    auto at = [&](int x, int y) { return rep[mod[((y + ph) % ph) * pw + (x + pw) % pw]]; };
+    std::vector<u8> out((size_t)w * h * 4);
+    for (int y = 0; y < h; y++)
+        for (int x = 0; x < w; x++) {
+            // Modulation weight (0..8 towards B) and punch-through alpha.
+            const int p = y * pw + x, md = mode[p];
+            int wgt;
+            bool punch = false;
+            if (!two) {
+                static const int punch_rep[4] = {0, 4, 4, 8};
+                wgt = md ? punch_rep[mod[p]] : rep[mod[p]];
+                punch = md && mod[p] == 2;
+            } else if (!md || ((x ^ y) & 1) == 0) {
+                wgt = rep[mod[p]];
+            } else if (md == 1) {
+                wgt = (at(x, y - 1) + at(x, y + 1) + at(x - 1, y) + at(x + 1, y) + 2) / 4;
+            } else if (md == 2) {
+                wgt = (at(x - 1, y) + at(x + 1, y) + 1) / 2;
+            } else {
+                wgt = (at(x, y - 1) + at(x, y + 1) + 1) / 2;
+            }
+            // A and B, bilinearly upscaled from the four nearest block centres (wrapping).
+            int u = x - bx / 2 + pw, v = y - by / 2 + ph;
+            u32 i0 = (u / bx) % nbx, j0 = (v / by) % nby, i1 = (i0 + 1) % nbx, j1 = (j0 + 1) % nby;
+            int fx = u % bx, fy = v % by;
+            int w00 = (bx - fx) * (by - fy), w10 = fx * (by - fy), w01 = (bx - fx) * fy, w11 = fx * fy;
+            u8 *o = &out[((size_t)y * w + x) * 4];
+            for (int k = 0; k < 4; k++) {
+                auto lerp = [&](const std::vector<u8> &c) {
+                    return c[(j0 * nbx + i0) * 4 + k] * w00 + c[(j0 * nbx + i1) * 4 + k] * w10 +
+                           c[(j1 * nbx + i0) * 4 + k] * w01 + c[(j1 * nbx + i1) * 4 + k] * w11;
+                };
+                const int area = bx * by, a = lerp(cola), b = lerp(colb);
+                o[k] = (u8)((a * (8 - wgt) + b * wgt + area * 4) / (area * 8));
+            }
+            if (punch) o[3] = 0;
+            if (f == PVRTC_RGB_4BPP || f == PVRTC_RGB_2BPP) o[3] = 255;
+        }
+    return out;
+}
+
 void t_glCompressedTexImage2D(GLenum t, GLint l, GLenum f, GLsizei w, GLsizei h, GLint b, GLsizei s, P(const void) d) {
+    tex_stat("compressed", f);
+    if (is_pvrtc(f) && !gpu_has_pvrtc() && d) {
+        std::vector<u8> rgba = pvrtc_decode(f, w, h, (const u8 *)d.get());
+        glTexImage2D(t, l, GL_RGBA, w, h, b, GL_RGBA, GL_UNSIGNED_BYTE, rgba.data());
+        return;
+    }
     if (is_atc(f) && !gpu_has_atc() && d) {
         std::vector<u8> rgba = atc_decode(f, w, h, (const u8 *)d.get());
         glTexImage2D(t, l, GL_RGBA, w, h, b, GL_RGBA, GL_UNSIGNED_BYTE, rgba.data());
@@ -348,7 +497,12 @@ void t_glStencilMaskSeparate(GLenum f, GLuint m) { glStencilMaskSeparate(f, m); 
 void t_glStencilOp(GLenum a, GLenum b, GLenum c) { glStencilOp(a, b, c); } THUNK(glStencilOp, t_glStencilOp);
 void t_glStencilOpSeparate(GLenum f, GLenum a, GLenum b, GLenum c) { glStencilOpSeparate(f, a, b, c); } THUNK(glStencilOpSeparate, t_glStencilOpSeparate);
 void t_glTexEnvf(GLenum t, GLenum p, float v) { glTexEnvf(t, p, v); } THUNK(glTexEnvf, t_glTexEnvf);
-void t_glTexImage2D(GLenum t, GLint l, GLint i, GLsizei w, GLsizei h, GLint b, GLenum f, GLenum ty, P(const void) d) { glTexImage2D(t, l, i, w, h, b, f, ty, d); } THUNK(glTexImage2D, t_glTexImage2D);
+void t_glTexImage2D(GLenum t, GLint l, GLint i, GLsizei w, GLsizei h, GLint b, GLenum f, GLenum ty, P(const void) d) {
+    tex_stat(ty == GL_UNSIGNED_BYTE ? "raw u8" : ty == GL_UNSIGNED_SHORT_5_6_5 ? "raw 565" : ty == GL_UNSIGNED_SHORT_4_4_4_4 ? "raw 4444"
+             : ty == GL_UNSIGNED_SHORT_5_5_5_1 ? "raw 5551" : "raw other", f);
+    glTexImage2D(t, l, i, w, h, b, f, ty, d);
+}
+THUNK(glTexImage2D, t_glTexImage2D);
 void t_glTexParameteri(GLenum t, GLenum p, GLint v) { glTexParameteri(t, p, v); } THUNK(glTexParameteri, t_glTexParameteri);
 void t_glTexParameteriv(GLenum t, GLenum p, P(const GLint) v) { glTexParameteriv(t, p, v); } THUNK(glTexParameteriv, t_glTexParameteriv);
 void t_glTexSubImage2D(GLenum t, GLint l, GLint x, GLint y, GLsizei w, GLsizei h, GLenum f, GLenum ty, P(const void) d) { glTexSubImage2D(t, l, x, y, w, h, f, ty, d); } THUNK(glTexSubImage2D, t_glTexSubImage2D);

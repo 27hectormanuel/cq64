@@ -15,7 +15,14 @@ AEABI="__aeabi_idiv __aeabi_idivmod __aeabi_uidiv __aeabi_uidivmod __aeabi_ldivm
        __aeabi_memset __aeabi_memset4 __aeabi_memset8 __aeabi_memclr __aeabi_memclr4 __aeabi_memclr8"
 printf "%s\n" $AEABI > "$OUT/aeabi.syms"
 BUILTINS=$OUT/libbuiltins-export.a
-$TC/bin/llvm-objcopy --set-symbols-visibility="$OUT/aeabi.syms"=default \
+# --set-symbols-visibility needs LLVM 18+; older NDKs lack it, so fall back to llvm-mingw's
+# (LLVM_MINGW, set by build_win.sh) or one on PATH.
+OBJCOPY=
+for c in "$TC/bin/llvm-objcopy" "${LLVM_MINGW:+$LLVM_MINGW/bin/llvm-objcopy}" "$(command -v llvm-objcopy || true)"; do
+    if [ -n "$c" ] && [ -x "$c" ] && "$c" --help 2>/dev/null | grep -q -- --set-symbols-visibility; then OBJCOPY=$c; break; fi
+done
+[ -n "$OBJCOPY" ] || { echo "guest/build.sh: needs llvm-objcopy with --set-symbols-visibility (LLVM 18+; NDK r27+)" >&2; exit 1; }
+"$OBJCOPY" --set-symbols-visibility="$OUT/aeabi.syms"=default \
     "$(ls "$TC"/lib/clang/*/lib/linux/libclang_rt.builtins-arm-android.a | sort -V | tail -1)" "$BUILTINS"
 UNDEF=$(for s in $AEABI; do printf -- "-Wl,-u,%s " $s; done)
 

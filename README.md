@@ -160,31 +160,36 @@ the phone's `Android/obb/com.doublefine.mmoj/` folder rather than inside the APK
 
 ## Costume Quest on Windows (preview)
 
-`cq64.exe` runs Costume Quest's Android version on Windows **without an Android emulator**: the
-same ARM translator and host as the phone build, with SDL2 for the window, input and sound, and
-ANGLE for OpenGL ES on Direct3D 11. Details: [docs/windows.md](docs/windows.md).
+**Costume Quest Mobile** for Windows runs Costume Quest's Android version **without an Android
+emulator**: the same ARM translator and host as the phone build, with SDL2 for the window, input
+and sound, and ANGLE for OpenGL ES on Direct3D 11. Any of the four GPU-specific APKs works
+(Adreno, Mali, PowerVR, Tegra). Details: [docs/windows.md](docs/windows.md),
+[docs/apk-variants.md](docs/apk-variants.md).
 
 **Playing** (from a release zip, or your own build below):
 
-1. Unzip `cq64-windows-optimized.zip` (or `-original`) anywhere.
-2. **Drag your Costume Quest APK onto `cq64.exe`.** Nothing is extracted or copied: the game's code
-   and data are read from the APK each time it starts.
-3. From then on just start `cq64.exe` (it remembers the APK in `cq64-data/apk.txt`). Started with no
-   APK known, it uses `CostumeQuest.apk` next to it or asks for the file.
+1. Unzip `CostumeQuestMobile-optimized.zip` (or `-original`) anywhere.
+2. **Drag your Costume Quest APK onto `Costume Quest Mobile.exe`.** Nothing is extracted or copied:
+   the game's code and data are read from the APK each time it starts.
+3. From then on just start it (the APK is remembered in `cq64-data/apk.txt`). Started with no APK
+   known, it uses `CostumeQuest.apk` next to it or asks for the file.
+
+On Linux or a Steam Deck: `./play-on-linux.sh /path/to/CostumeQuest.apk` runs it in Steam's Proton.
 
 Mouse = touch; arrow keys, Enter and Escape (back); controllers work as on Android (optimized build).
-Saves go to `cq64-data/` next to `cq64.exe`.
+Saves go to `cq64-data/` next to the program.
 
 **Building** (Linux or WSL2, same requirements as the Android build plus `zstd`; **no APK needed**):
 
 ```sh
-scripts/build_win.sh            # optimized; or: scripts/build_win.sh original
+scripts/build_win.sh                       # optimized; or: scripts/build_win.sh original
+scripts/build_win.sh --icon icon-1024.png  # with your own picture as the program's icon
 ```
 
 The first run downloads the Windows toolchain and libraries, checksum-verified, into
 `third_party/win` (~700 MB): llvm-mingw, SDL2, zlib and ANGLE (from Electron's official release).
-Output: `out/windows/` and `out/cq64-windows-<variant>.zip`, which contain only CQ64, SDL2 and ANGLE
-(no game files), so they can be shared; each player brings their own APK.
+Output: `out/windows/` and `out/CostumeQuestMobile-<variant>.zip`, which contain only CQ64, SDL2
+and ANGLE (no game files), so they can be shared; each player brings their own APK.
 
 ## Using it
 

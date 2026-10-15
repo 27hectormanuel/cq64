@@ -71,11 +71,23 @@ if(WIN32)
         message(FATAL_ERROR "Set GUEST_RT to a built libguestrt.so (guest/build.sh)")
     endif()
     enable_language(ASM)
+    enable_language(RC)
     configure_file(src/win/guest_rt.S.in ${CMAKE_CURRENT_BINARY_DIR}/guest_rt.S @ONLY)
+    set(WIN_ICON "" CACHE FILEPATH "Optional .ico for cq64.exe (build_win.sh --icon)")
+    if(WIN_ICON)
+        set(WIN_ICON_LINE "1 ICON \"${WIN_ICON}\"")
+    else()
+        set(WIN_ICON_LINE "")
+    endif()
+    configure_file(src/win/cq64.rc.in ${CMAKE_CURRENT_BINARY_DIR}/cq64.rc @ONLY)
+    if(WIN_ICON)
+        set_source_files_properties(${CMAKE_CURRENT_BINARY_DIR}/cq64.rc PROPERTIES OBJECT_DEPENDS "${WIN_ICON}")
+    endif()
     set_source_files_properties(${CMAKE_CURRENT_BINARY_DIR}/guest_rt.S PROPERTIES OBJECT_DEPENDS "${GUEST_RT}")
     add_executable(cq64
         ${HOST_SOURCES}
         ${CMAKE_CURRENT_BINARY_DIR}/guest_rt.S
+        ${CMAKE_CURRENT_BINARY_DIR}/cq64.rc
         src/win/affinity_win.cpp
         src/win/fakejvm.cpp
         src/win/fakejvm.h

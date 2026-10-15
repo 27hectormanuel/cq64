@@ -1,0 +1,29 @@
+// SPDX-License-Identifier: CC0-1.0
+// Windows build: version information and (if given, build_win.sh --icon) the program's icon.
+#include <winver.h>
+@WIN_ICON_LINE@
+1 VERSIONINFO
+FILEVERSION 0,1,0,0
+PRODUCTVERSION 0,1,0,0
+FILEOS VOS_NT_WINDOWS32
+FILETYPE VFT_APP
+BEGIN
+    BLOCK "StringFileInfo"
+    BEGIN
+        BLOCK "040904b0"
+        BEGIN
+            VALUE "CompanyName", "CQ64 (https://github.com/27hectormanuel/cq64)"
+            VALUE "FileDescription", "Costume Quest Mobile"
+            VALUE "ProductName", "Costume Quest Mobile"
+            VALUE "InternalName", "cq64"
+            VALUE "OriginalFilename", "Costume Quest Mobile.exe"
+            VALUE "FileVersion", "0.1.0"
+            VALUE "ProductVersion", "0.1.0"
+            VALUE "LegalCopyright", "CQ64 is public domain (CC0). Costume Quest (c) Double Fine Productions; bring your own copy."
+        END
+    END
+    BLOCK "VarFileInfo"
+    BEGIN
+        VALUE "Translation", 0x409, 1200
+    END
+END
