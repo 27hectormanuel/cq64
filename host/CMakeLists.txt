@@ -89,6 +89,7 @@ if(WIN32)
         ${CMAKE_CURRENT_BINARY_DIR}/guest_rt.S
         ${CMAKE_CURRENT_BINARY_DIR}/cq64.rc
         src/win/affinity_win.cpp
+        src/win/console_win.cpp
         src/win/fakejvm.cpp
         src/win/fakejvm.h
         src/win/posix_win.cpp
@@ -100,7 +101,7 @@ if(WIN32)
     target_compile_options(cq64 PRIVATE "$<$<COMPILE_LANGUAGE:CXX>:-Wall;-Wno-unused-function;-fexceptions;SHELL:-include ${CMAKE_CURRENT_SOURCE_DIR}/src/win/include/win_compat.h>")
     target_compile_definitions(cq64 PRIVATE _FILE_OFFSET_BITS=64 WIN32_LEAN_AND_MEAN NOMINMAX)
     target_link_directories(cq64 PRIVATE ${WIN_DEPS}/sdl2/ucrt64/lib ${WIN_DEPS}/zlib/ucrt64/lib ${WIN_DEPS}/lib)
-    target_link_libraries(cq64 PRIVATE dynarmic mingw32 SDL2main ${WIN_DEPS}/sdl2/ucrt64/lib/libSDL2.dll.a EGL GLESv2 ${WIN_DEPS}/zlib/ucrt64/lib/libz.a ws2_32 shlwapi comdlg32 pthread)
+    target_link_libraries(cq64 PRIVATE dynarmic mingw32 SDL2main ${WIN_DEPS}/sdl2/ucrt64/lib/libSDL2.dll.a EGL GLESv2 ${WIN_DEPS}/zlib/ucrt64/lib/libz.a ws2_32 shlwapi comdlg32 gdi32 pthread)
     target_link_options(cq64 PRIVATE -static-libstdc++ -static-libgcc -mconsole)
 else()
     add_library(cqhost SHARED ${HOST_SOURCES} src/affinity.cpp)

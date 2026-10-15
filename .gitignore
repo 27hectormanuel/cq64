@@ -13,3 +13,4 @@
 ant.mp3
 cqdata.zip
 /third_party/win
+/pc-console/*/out/

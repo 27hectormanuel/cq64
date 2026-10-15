@@ -6,6 +6,7 @@
 // calls: keys as Android key codes, the mouse as touches, controllers through the virtual pad.
 //
 //   cq64.exe [path to your Costume Quest APK]     (default: CostumeQuest.apk next to cq64.exe)
+#include "console_win.h"
 #include "fakejvm.h"
 
 #include "../common.h"
@@ -57,6 +58,7 @@ void before_swap() {
     static std::map<GLenum, int> errors;
     for (GLenum e; (e = glGetError()) != GL_NO_ERROR;)
         if (errors[e]++ < 3) LOGW("GL error 0x%x before frame %d", e, frame);
+    winconsole::draw(g_win_w, g_win_h);
     if (++frame % 30 == 0 && access((g_files + "/screenshot").c_str(), F_OK) == 0) {
         unlink((g_files + "/screenshot").c_str());
         g_shot_requested = true;
@@ -124,9 +126,10 @@ const char *const kTouchModeOverride =  // DevTools.TOUCH_MODE_OVERRIDE
     "input.IsTouchMode = function() if _cqPad then return false end return _cqIsTouchMode() end; "
     "input.IsGamepadMode = function() if _cqPad then return true end return _cqIsGamepadMode() end end";
 
-void dev_command(const char *lua) {
+void dev_command(const char *lua) {  // run as is (\x01), not echoed in the debug console
     if (fakejvm::native(DEVTOOLS, "nativeCommand"))
-        fakejvm::call_static<void>(DEVTOOLS, "nativeCommand", (jobject)fakejvm::new_string(lua));
+        fakejvm::call_static<void>(DEVTOOLS, "nativeCommand",
+                                   (jobject)fakejvm::new_string((std::string("\x01") + lua).c_str()));
 }
 
 // Buttons held by the test input ("pad a 200", see debug_input), sent with the real controller's.
@@ -275,7 +278,9 @@ void fmod_audio() {
 // Test input without a keyboard or mouse: lines in files/input such as "key 66" (an Android key
 // code, pressed and released), "tap 0.5 0.4" (a touch at that fraction of the window) or
 // "wait 500" (milliseconds) or "pad a 200" (a virtual controller button held that long: a b x y
-// back start ls rs lb rb up down left right).
+// back start ls rs lb rb up down left right). "sdlkey Return" (an SDL key name: ` F1 Tab Up ...)
+// and "type <text>" go through the window's own event queue, as a real keyboard would (the
+// debug console's path).
 void debug_input() {
     const std::string path = win::files_dir() + "/input";
     for (;;) {
@@ -318,6 +323,26 @@ void debug_input() {
                 SDL_Delay(ms);
                 g_test_buttons &= ~(1 << bit);
                 SDL_PushEvent(&e);
+            } else if (char key[32]; sscanf(l.c_str(), "sdlkey %31s", key) == 1) {
+                SDL_Event e{};
+                e.type = SDL_KEYDOWN;
+                e.key.state = SDL_PRESSED;
+                e.key.keysym.sym = SDL_GetKeyFromName(key);
+                if (e.key.keysym.sym == SDLK_UNKNOWN) continue;
+                SDL_PushEvent(&e);
+                SDL_Delay(60);
+                e.type = SDL_KEYUP;
+                e.key.state = SDL_RELEASED;
+                SDL_PushEvent(&e);
+            } else if (l.rfind("type ", 0) == 0) {
+                std::string t = l.substr(5, l.find_last_not_of("\r\n") + 1 - 5);
+                for (size_t i = 0; i < t.size(); i += sizeof(SDL_TextInputEvent::text) - 1) {
+                    SDL_Event e{};
+                    e.type = SDL_TEXTINPUT;
+                    std::string part = t.substr(i, sizeof(e.text.text) - 1);
+                    memcpy(e.text.text, part.c_str(), part.size() + 1);
+                    SDL_PushEvent(&e);
+                }
             } else if (sscanf(l.c_str(), "wait %d", &ms) == 1) {
                 SDL_Delay(ms);
             }
@@ -442,6 +467,7 @@ int main(int argc, char **argv) {
     for (;;) {
         SDL_Event e;
         if (!SDL_WaitEventTimeout(&e, 100)) continue;
+        if (winconsole::handle_event(e)) continue;  // the debug console (` or F1) has the keyboard
         switch (e.type) {
         case SDL_QUIT:
             LOGI("quitting");

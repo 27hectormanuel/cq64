@@ -186,6 +186,21 @@ void submit(const std::string &cmd) {
     g_queue.push_back(cmd);
 }
 
+std::string output_text() {
+    std::lock_guard<std::mutex> lk(g_out_lock);
+    return g_out;
+}
+
+std::string command_list() {
+    std::lock_guard<std::mutex> lk(g_out_lock);
+    return g_list;
+}
+
+void clear_output() {
+    std::lock_guard<std::mutex> lk(g_out_lock);
+    g_out.clear();
+}
+
 void frame_presented() {
     affinity::frame_presented();
     // Pace to the cap: sleep until this frame's slot, resetting the schedule after a stall.

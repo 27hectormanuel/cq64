@@ -161,6 +161,9 @@ Windows only (in `host/src/win/win_main.cpp`):
   as `test input: ...`.
 - `cq64-data/files/screenshot` — the next frame is saved as `screenshot.bmp` next to the program
   (F12 does the same).
+- The console itself: F1 or `` ` `` in the game window (`host/src/win/console_win.cpp`, drawn over
+  the frame before each swap). Test input `sdlkey <SDL key name>` and `type <text>` drive it
+  through the window's own event queue, as a keyboard would.
 - `CQ64_IGNORE_CONTROLLERS=1` — behaves as if no controller were connected (tests touch-only play).
 - The log names the controller input that ends touch mode (`controller input after a touch`).
 

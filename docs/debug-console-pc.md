@@ -1,4 +1,4 @@
-# The debug console on PC: research
+# The debug console on PC
 
 How to bring Costume Quest's Lua developer console (see [debug-console.md](debug-console.md) for
 how CQ64 revives it on Android) to three more places:
@@ -7,9 +7,32 @@ how CQ64 revives it on Android) to three more places:
 2. the **official Windows release** (`Cq.exe`);
 3. the **official Linux release** (GOG, `Cq.bin.x86`).
 
-This is research only: nothing here has been built yet. Findings were measured on 2026-10-15
-by disassembly (`objdump`) and decompilation (Ghidra 12.1.4 through a GhidraMCP server, see
-[Tools](#tools)). No game files are in this repository.
+Findings were measured on 2026-10-15 by disassembly (`objdump`) and decompilation (Ghidra 12.1.4
+through a GhidraMCP server, see [Tools](#tools)). No game files are in this repository.
+
+**Built and tested (2026-10-15, Steam Deck):**
+
+| Where | What | Code | Tested |
+|---|---|---|---|
+| Costume Quest Mobile for Windows | Console drawn over the game: F1 or `` ` ``, Tab completion from the game's Lua, history, scrollback | `host/src/win/console_win.cpp` (see [windows.md](windows.md)) | Both variants under Proton: title screen and in the world; the game draws normally after it closes |
+| Official Windows (`Cq.exe`) | `dinput8.dll` proxy: the game's **own** console comes back (its font, its prompt, its red errors) | [`pc-console/windows`](../pc-console/README.md) | Under Proton 11: opens, typing, Enter runs commands (`> 3`, errors in red), history. Not tested: blocking a **real** keyboard from the game while the console is open (see below) |
+| Official Linux (GOG `Cq.bin.x86`) | `LD_PRELOAD` library: typing and drawing in the game's style, over the game | [`pc-console/linux`](../pc-console/README.md) | Natively with the Steam runtime: title screen, history, `~=`, and in the world (`game.AddCandyAmount(100)` → the candy counter shows 100) |
+
+What the tests showed beyond the research:
+
+- `Cq.exe` does create the console's font. Setting `console+0x10` and filling the input line was
+  enough; the original console then draws by itself (small white text at the bottom left, errors
+  in red, lines fading after 3-5 s).
+- `Cq.exe` reads the keyboard through **DirectInput** (it creates `GUID_SysKeyboard` and
+  `GUID_SysMouse` devices) as well as window messages. The proxy therefore also blanks the
+  keyboard device's `GetDeviceState`/`GetDeviceData` while the console is open. Keys injected for
+  testing (`SendInput`) don't reach an unfocused Wine window, so that part could only be checked with
+  a real keyboard on a focused game window.
+- The Linux game reads `keysym.scancode`, not `keysym.sym`. It ships SDL 2.0.0, which has no
+  `SDL_GL_GetDrawableSize` (the library falls back to `SDL_GetWindowSize`).
+- Shift+`` ` `` types `~` (Lua's `~=`) in all three, instead of closing the console.
+- The game's main thread on Windows renames itself "Buddha Main" (the engine's name), so look for
+  that name, not `Cq.exe`, when finding the process.
 
 | Binary | Size | MD5 | SHA-256 | Notes |
 |---|---|---|---|---|
@@ -215,10 +238,9 @@ in both PC releases.
 
 ## 6. Open questions
 
-- Does `Cq.exe` create the console font (`*0xa9124c` non-null)? This decides whether §4 needs any
-  drawing code. Test: §4 "First test".
-- Does `Cq.exe` read the keyboard through `GameApp::HandleInput` only, or DirectInput too
-  (whether the console must also blank DirectInput)?
+- ~~Does `Cq.exe` create the console font?~~ Yes (tested).
+- ~~DirectInput too?~~ Yes: the game creates a DirectInput keyboard; the proxy blanks it while the
+  console is open (not yet checked with a real keyboard).
 - Which Lua functions the PC builds have compared with Android's 1,117 (the list in
   `debug_commands.txt`): run the function-listing command from debug-console.md §6 once a console
   works.

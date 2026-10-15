@@ -25,10 +25,15 @@ pthread, GL and JNI bridges — packaged as a desktop program:
   the game uploads those textures with an invalid format and the world draws black.
   `CQ64_GL_STATS=1` logs the texture formats the game uploads.
 - Input: the mouse acts as touch, keys as Android key codes, controllers go to the virtual pad
-  (optimized variant). Lightly tested. No developer menu yet.
+  (optimized variant). Lightly tested.
+- **Debug console**: F1 or `` ` `` opens the game's Lua command line over the game (both variants;
+  `host/src/win/console_win.cpp`). Enter runs a line, Tab completes from every function the game's
+  Lua exposes, Up/Down is history, PgUp/PgDn scrolls, Ctrl+V pastes, Ctrl+L clears, Escape closes.
+  Output is the same as the Android console's (`cq64-data/files/console.out` too). The Android
+  developer menu's other entries (fps, frame cap, render scale) aren't there yet.
 - Debugging: `cq64.log`; F12 or a file named `screenshot` in `cq64-data/files` saves the game's
-  own frame; a file named `input` there sends input (`key 66`, `tap 0.5 0.4`, `wait 500`, one per
-  line); `CQ64_DUMP_SHADERS=1` writes every shader the game compiles to `cq64-data/files/shaders`
+  own frame; a file named `input` there sends input (`key 66`, `tap 0.5 0.4`, `wait 500`,
+  `sdlkey F1`, `type debug.GetPlayer()`, one per line); `CQ64_DUMP_SHADERS=1` writes every shader the game compiles to `cq64-data/files/shaders`
   (all debug switches: [debug-console.md](debug-console.md#8-debug-switches-both-builds)).
 
 ## Build (from Linux or WSL2)
