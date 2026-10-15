@@ -77,6 +77,20 @@ Files go in `$CQCONSOLE_DIR` (default: the game folder): the same `cqconsole.log
 `-keys.txt` (`key <SDL key name>` such as `key Return`, `text <characters>` or `pad lb+rb+a [ms]`) and `-shot` as
 on Windows.
 
+**Recording (Linux only):** creating the file `cqconsole-record` starts recording the game's own
+frames, and creating it again stops. Each frame goes as raw RGB24, bottom-up, to the named pipe
+`cqconsole-record.fifo`, which a reader must already have open (the frame size is in the log).
+For example, with a 1280×800 window:
+
+```sh
+mkfifo cqconsole-record.fifo
+ffmpeg -use_wallclock_as_timestamps 1 -f rawvideo -pix_fmt rgb24 -s 1280x800 -i cqconsole-record.fifo \
+    -vf vflip -fps_mode cfr -r 30 -c:v libx264 -pix_fmt yuv420p out.mp4 &
+touch cqconsole-record    # start; touch it again to stop, and ffmpeg finishes the file
+```
+
+The game waits for the reader, so a slow encoder slows the game down rather than dropping frames.
+
 **Saves:** the game saves to `$XDG_DATA_HOME/doublefine/costumequest` (normally
 `~/.local/share/...`). For tests that shouldn't touch your saves, run with
 `XDG_DATA_HOME=/some/scratch/dir` and copy the saves there first if you need one.
@@ -90,6 +104,8 @@ on Windows.
 - **cqconsole.so:** `CLANG=<clang> linux/build.sh [out dir]`. This needs a clang with the x86
   target and `ld.lld`, the system's 32-bit `libc.so.6` (`/usr/lib32`), and ffmpeg with `drawtext`
   plus a monospace font for the generated font atlas (`make_font.py`). It needs no i386 C headers.
+  Use a regular LLVM clang (llvm-mingw's `clang` works): a library built with the Android NDK's
+  clang crashed the game at start.
 
 ## Testing helpers (`testing/`)
 

@@ -299,8 +299,39 @@ framework (`testbase.lua`, `utils/testsystem.lua`), RoBert bot bases (`robertbas
 `bot/mashing.lua`, `bot/costumequestinfinite.lua`), mission run-throughs
 (`bot/missions/l_010_intro.lua` … `l_030_escapewitch.lua`, `mall_mq_03/05`), summon tests and a
 suburbs travel script, 33 files in all. The Linux binary still has `__dummy_testSetRoBertRunning`
-and `__dummy_testSetInputStreamType`. Whether these scripts can still be loaded and run from the
-console on the disc/GOG builds is untested (see §7).
+and `__dummy_testSetInputStreamType`.
+
+**They still run** (tested 2026-10-15 on GOG Linux, the same build as the disc's, recorded with
+the console's record mode). `boot.lua` loads `Data/Test/Utils/TestSystem.lua` at start, so on
+these builds `CreateTestInstance`, `debug.RunTest`, `debug.StopAllTests` and RoBert's `test.*`
+functions exist from the title screen, and `loadfile('Data/Test/…')` reads from the pack. (On
+Steam, without the pack, the framework is missing.) Steps:
+
+1. Start a game: `frontend.AttemptStartNewGame()` from the title screen.
+   `app.DoStartNewGame()` crashed the game there.
+2. Stub the four removed functions the Costume Quest bots call:
+   `_nop=function() end app.ToggleDebugText=_nop app.ScreenGrab=_nop debug.Suicide=_nop debug.GetCameraInvert=function() return false end`.
+   Without them `Bot.Walking` fails at once (`Walking.lua:82: attempt to call field
+   'ToggleDebugText' (a nil value)`). The other missing functions they use (`game.Azrael`,
+   `GetSquadMembers`, `OrderGroupToMove`, `UnlockUpgrade` …) are only in the Brütal Legend tests
+   (`army.lua`, `balance.lua`).
+3. `debug.RunTest('<name>')`, the name being the path under `Data/Test` with dots
+   (`Bot.Walking`, `Bot.CostumeQuest`, `Summon.All`). It returns the test; `g_RTGameTest.status`
+   and `.success` show progress. `debug.StopAllTests()` stops them, and `slomo(1)` restores the
+   speed (bots run at `slomo(20)`).
+
+Failure reasons only go to the C function `TestTrace`, which prints nothing in retail, so wrap it
+to keep them: `_tt={} _otr=_otr or TestTrace TestTrace=function(s) table.insert(_tt,s) return _otr(s) end`,
+then `table.concat(_tt,' || ')`.
+
+Results:
+
+| Test | Result |
+|---|---|
+| `Bot.Walking` | Roams the streets and collects candy; walks into scripted battles, where it reports "Bot is stuck" |
+| `Bot.CostumeQuest` | Plays a new game by itself from the start to the Dorsilla battle in Fall Valley (where its script ends), winning fights with `cq.WinBattle()`. **Passed**, with 2,153 candy. Missions without a bot script are "cheat completed" (3 in that run). In an earlier run the game crashed in the mall instead; the cause is unknown |
+
+Not yet tried on Windows 1.0.0.11.
 
 ## 7. Open questions
 
@@ -313,8 +344,9 @@ console on the disc/GOG builds is untested (see §7).
 - Whether Linux `QueueCommand` from `HandleInput` behaves the same as `ExecuteCommand(-1)` in
   single player. It should: it only builds a network command while a game session is recording or
   playing back.
-- Can the `Man_Tests` scripts (§6) be loaded and run from the console on the disc/GOG builds, for
-  example the RoBert mission bots?
+- ~~Can the `Man_Tests` scripts (§6) be run from the console on the disc/GOG builds?~~ Yes on
+  Linux, with four stubs (§6). Windows 1.0.0.11 not yet tried, nor what crashed the game in the
+  mall in one story-bot run.
 - LB + RB + A on the Steam `Cq.exe` (XInput hooked by ordinal) hasn't been tested in the game yet.
 
 ## Tools

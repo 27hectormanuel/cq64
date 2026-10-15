@@ -19,6 +19,9 @@
 //                            pushed as SDL key events (the console's own path), or
 //                            "pad lb+rb+a [ms]" (controller buttons, as the game polls them)
 //   cqconsole-shot           saves the next frame as cqconsole-shot.bmp
+//   cqconsole-record         starts / stops recording: each frame is written as raw RGB24
+//                            (bottom-up) to cqconsole-record.fifo, a named pipe that a reader
+//                            such as ffmpeg must already have open; the frame size is logged
 // Each new console line is also printed to stdout and cqconsole.log.
 //
 // Built without the system's C headers (SteamOS has none for i386): the few libc, SDL and GL
@@ -54,6 +57,13 @@ size_t strcspn(const char *, const char *);
 char *strcpy(char *, const char *);
 long readlink(const char *, char *, size_t);
 int mprotect(void *, size_t, int);
+int open(const char *, int, ...);
+long write(int, const void *, size_t);
+int close(int);
+int fcntl(int, int, ...);
+#define O_WRONLY 1
+#define O_NONBLOCK 04000
+#define F_SETFL 4
 void *malloc(size_t);
 void *dlsym(void *, const char *);
 #define RTLD_DEFAULT ((void *)0)
@@ -198,6 +208,7 @@ static int g_len, g_cursor;
 static char g_history[32][512];
 static int g_hist_n, g_hist_pos = -1;
 static volatile int g_shot;
+static volatile int g_record;  // wanted by the game thread; the render thread opens/closes the pipe
 static volatile uint32_t g_test_pad, g_test_pad_until;  // test buttons ("pad lb+rb+a 300"), every controller
 
 static void lock(void) { while (__atomic_exchange_n(&g_spin, 1, __ATOMIC_ACQUIRE)) {} }
@@ -408,6 +419,10 @@ static void poll_files(void) {
         fclose(f);
         g_shot = 1;
     }
+    if ((f = take("cqconsole-record"))) {
+        fclose(f);
+        g_record = !g_record;
+    }
 }
 
 // Copies up to `max` of the console's lines (text, seconds left, colour).
@@ -523,6 +538,48 @@ static void save_bmp(int w, int h) {
         fwrite(px, 1, (size_t)stride * h, f);
         fclose(f);
         logf("screenshot %s (%dx%d)", p, w, h);
+    }
+}
+
+// Recording: every frame, raw, into the named pipe (render thread). Blocks while the reader is
+// behind, so the game slows down rather than dropping frames.
+static void record_frame(int w, int h) {
+    static int fd = -1, rw, rh;
+    static unsigned char *px;
+    static size_t cap;
+    char p[600];
+    if (g_record && fd >= 0 && (w != rw || h != rh)) g_record = 0;  // size changed: stop
+    if (!g_record) {
+        if (fd >= 0) close(fd), fd = -1, logf("recording stopped");
+        return;
+    }
+    if (fd < 0) {
+        path(p, sizeof p, "cqconsole-record.fifo");
+        if ((fd = open(p, O_WRONLY | O_NONBLOCK)) < 0) {  // no reader: give up
+            logf("recording: no reader on %s", p);
+            g_record = 0;
+            return;
+        }
+        fcntl(fd, F_SETFL, 0);  // then blocking: the game waits for the reader
+        rw = w, rh = h;
+        logf("recording %dx%d rgb24 bottom-up to %s", w, h, p);
+    }
+    size_t n = (size_t)w * 3 * h;
+    if (n > cap && !(px = malloc(cap = n))) {
+        cap = 0;
+        return;
+    }
+    if (gl.BindFramebuffer) gl.BindFramebuffer(GL_READ_FRAMEBUFFER, 0);
+    gl.PixelStorei(GL_PACK_ALIGNMENT, 1);
+    gl.ReadPixels(0, 0, w, h, GL_RGB, GL_UNSIGNED_BYTE, px);
+    for (size_t off = 0; off < n;) {
+        long r = write(fd, px + off, n - off);
+        if (r <= 0) {  // reader gone
+            close(fd), fd = -1, g_record = 0;
+            logf("recording stopped: reader closed the pipe");
+            return;
+        }
+        off += (size_t)r;
     }
 }
 
@@ -651,6 +708,7 @@ void SDL_GL_SwapWindow(void *window) {
                 if (gl.BindFramebuffer) gl.BindFramebuffer(GL_READ_FRAMEBUFFER, 0);
                 save_bmp(w, h);
             }
+            record_frame(w, h);
         }
     }
     sdl_swap(window);
