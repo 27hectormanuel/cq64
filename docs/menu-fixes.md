@@ -192,8 +192,19 @@ old CRC and works); the new entries carry correct ones anyway.
   `ant.mp3` it serves, read with Python's `zipfile`: all 35,320 other entries pass their CRC check,
   no entries overlap, and only the four entries above differ from the APK. The served movies,
   decompiled with FFDec, contain the new functions after the original frame-1 script.
-- **In the game:** see the commit / the branch's notes for what was tried on Windows. Android: not
-  built (see [pc-fixes-for-android.md](pc-fixes-for-android.md)).
+- **In the game (Costume Quest Mobile for Windows, optimized, under Proton on the Steam Deck,
+  2026-10-16, the hacked APK and a copy of a level-1 save):** the log shows both fixes added. The
+  main menu's and pause menu's selection box is red. In the journal's Quests page, the right stick
+  (test input `stick ry 1 1500`) scrolled the Completed Quests list to its end and the scrollbar
+  followed; `stick ry -1` scrolled it back. The Active Quests list fits its page in that save
+  (no scrollbar), so the left stick had nothing to scroll. Touches on the Deck's screen happened
+  during the run (the log's "controller input after a touch"), so the touch side was used but not
+  checked on its own. **Not yet tried:** the stamp shop (it needs more than 5 stamps for sale),
+  touch dragging of the quest lists, Android.
+- Opening the journal from Lua (`game.SetIngameGUIState(kIngameGUIState_Notebook)`) before a
+  save has finished loading crashes the game in `IngameGUIManager::LoadNotebook()` (null-page read
+  at 0x14: no active session yet, `SessionManager::GetActiveSession()` returns null). A test
+  mistake, not related to the fixes; wait for the street before opening menus from Lua.
 
 ## Rebuilding the scripts
 

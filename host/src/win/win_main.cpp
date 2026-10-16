@@ -19,6 +19,7 @@
 #include <GLES2/gl2.h>
 #include <fcntl.h>
 
+#include <algorithm>
 #include <atomic>
 #include <map>
 #include <cstdlib>
@@ -134,6 +135,7 @@ void dev_command(const char *lua) {  // run as is (\x01), not echoed in the debu
 
 // Buttons held by the test input ("pad a 200", see debug_input), sent with the real controller's.
 std::atomic<jint> g_test_buttons{0};
+std::atomic<jint> g_test_axes[4];  // sticks held by the test input ("stick ry 1 500"): lx ly rx ry
 std::atomic<bool> g_test_touched{false};  // a test "tap" happened
 const Uint32 kPadTestEvent = SDL_RegisterEvents(1);
 
@@ -225,6 +227,8 @@ struct Pad {
         jint v[7] = {buttons};
         stick(SDL_CONTROLLER_AXIS_LEFTX, SDL_CONTROLLER_AXIS_LEFTY, v[1], v[2]);
         stick(SDL_CONTROLLER_AXIS_RIGHTX, SDL_CONTROLLER_AXIS_RIGHTY, v[3], v[4]);
+        for (int i = 0; i < 4; i++)
+            if (jint t = g_test_axes[i].load()) v[1 + i] = t;
         v[5] = trigger(SDL_CONTROLLER_AXIS_TRIGGERLEFT), v[6] = trigger(SDL_CONTROLLER_AXIS_TRIGGERRIGHT);
         if (!memcmp(v, sent, sizeof v)) return;  // nothing the game would see changed
         memcpy(sent, v, sizeof v);
@@ -284,7 +288,8 @@ void fmod_audio() {
 // Test input without a keyboard or mouse: lines in files/input such as "key 66" (an Android key
 // code, pressed and released), "tap 0.5 0.4" (a touch at that fraction of the window) or
 // "wait 500" (milliseconds) or "pad a 200" (a virtual controller button held that long: a b x y
-// back start ls rs lb rb up down left right; "pad lb+rb+a" holds several). "sdlkey Return" (an SDL key name: ` F1 Tab Up ...)
+// back start ls rs lb rb up down left right; "pad lb+rb+a" holds several), "stick ry 1 500" (a stick
+// axis lx ly rx ry held at -1..1 that long; y down is positive). "sdlkey Return" (an SDL key name: ` F1 Tab Up ...)
 // and "type <text>" go through the window's own event queue, as a real keyboard would (the
 // debug console's path).
 void debug_input() {
@@ -329,6 +334,19 @@ void debug_input() {
                 SDL_PushEvent(&e);
                 SDL_Delay(ms);
                 g_test_buttons &= ~mask;
+                SDL_PushEvent(&e);
+            } else if (char ax[4]; sscanf(l.c_str(), "stick %3s %f %d", ax, &x, &ms) >= 2) {
+                static const char *const axes[] = {"lx", "ly", "rx", "ry"};
+                int i = 0;
+                while (i < 4 && strcmp(ax, axes[i])) i++;
+                if (i == 4) continue;
+                if (sscanf(l.c_str(), "stick %*s %*f %d", &ms) != 1) ms = 300;
+                SDL_Event e{};
+                e.type = kPadTestEvent;
+                g_test_axes[i] = (jint)(std::clamp(x, -1.0f, 1.0f) * 32767);
+                SDL_PushEvent(&e);
+                SDL_Delay(ms);
+                g_test_axes[i] = 0;
                 SDL_PushEvent(&e);
             } else if (char key[32]; sscanf(l.c_str(), "sdlkey %31s", key) == 1) {
                 SDL_Event e{};
