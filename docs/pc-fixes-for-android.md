@@ -17,6 +17,7 @@ are PC-only, and what has been tested where.
 | Test input `pad <button> [ms]`, `stick <lx|ly|rx|ry> <-1..1> [ms]`, `CQ64_IGNORE_CONTROLLERS` | `host/src/win/win_main.cpp` | PC-only test tools (Android: `files/pad`, and unplugging the controller). | PC: yes. |
 | Journal: the sticks (and the mouse wheel) didn't scroll the quest lists; stamp shop: Down stopped at the 5th stamp. Both were Android touch changes ([menu-fixes.md](menu-fixes.md)) | `host/ui/*.as` (new), `host/src/menu_fixes_action.h` (generated), `host/src/datapatch.cpp` | **Needed, shared code** (branch `general-fixes-4-mobile`). | Pack check on the APK (all entries valid). Windows: journal right stick scrolls; stamp shop: Down/Up through all 7 stamps ([menu-fixes.md](menu-fixes.md#6-tests)). Android: not built. |
 | Main / pause menu selection box red again (was patched white to match PC) | `host/src/datapatch.cpp` | **Shared**: red on both, as Android shipped it. | Windows: red in both menus. Android: not built. |
+| Journal Quests page: dark squares in the lower left corners (Android textures smaller than the movie declares, e.g. `page_fade` 32x16 for 128x64; also `noStamp`, `life_meter_good`, credits `fade_img`, pause `coverup`) | `host/src/gamepad.cpp` | **Needed, shared code.** Seen on other phones too. | Windows: band instead of square; stamp slots and life meters fine. Android: not built. |
 
 ## How the HUD bug works
 

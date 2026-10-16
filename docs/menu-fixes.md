@@ -12,6 +12,7 @@ JPEXS FFDec 26.3.0) and reading `libCq.so`'s strings. No game files are in this 
 | Journal, Quests page | The sticks didn't scroll the quest lists (the mouse wheel didn't either) | `host/ui/notebook_fix.as`, added to `Notebook_DLC.gfx` |
 | Stamp shop | Down stopped at the 5th stamp, so the stamps below couldn't be chosen | `host/ui/stampshop_fix.as`, added to `StampShop_DLC.gfx` |
 | Main and pause menus | (colour only) the selection box was white, as on PC | The colour patch is gone: red, as on Android |
+| Journal, Quests page | Two dark squares in the lower left corners of the pages (other phones, Windows; not on a Mali phone in touch mode) | Textures drawn at the size the movie declares (`host/src/gamepad.cpp`, §7) |
 
 ## 1. Which movies the game loads
 
@@ -223,6 +224,51 @@ old CRC and works); the new entries carry correct ones anyway.
   save has finished loading crashes the game in `IngameGUIManager::LoadNotebook()` (null-page read
   at 0x14: no active session yet, `SessionManager::GetActiveSession()` returns null). A test
   mistake, not related to the fixes; wait for the street before opening menus from Lua.
+
+## 7. The journal's "shadows" (textures smaller than declared)
+
+On the Quests page, with a controller, a dark soft square showed in the lower left corner of each
+list (Windows; also seen on other phones, not on the Pixel's Mali GPU, 2026-10-16).
+
+**What it is.** `MapQuest` (the Quests page) places four sprites that tell there is more to scroll:
+158 / 165 at the bottom of the left / right page (x -205 / +205, y +520 px) and 160 / 163 at the
+top (flipped), with the instance names the script uses (`activeArrowDown`, `completedArrowDown`,
+`activeArrowUp`, `completedArrowUp`; `updateArrows()` shows them in controller mode, once, when the
+page loads). Each holds sprite 155, a shape (154, 128x64 px, a clipped bitmap fill of image 27,
+`page_fade`) scaled 2.89 wide (a 370 px band), and the arrow (`page_arrow`). `page_fade` is a soft
+black shadow: alpha rising from 0 at the top to ~0x99 at the bottom, fading at both ends.
+
+**Why it showed as a square.** The PC data has `page_fade` as a 128x64 DXT5 texture. The Android
+data has it as a 32x16 L8A8 texture (6 mipmaps); the movie still declares the image 128x64. GFx maps
+a bitmap fill to the texture by the texture's own size, so the band's coordinates ran over 4x the
+texture in each direction; with the clipped fill's clamping the whole gradient was squeezed into the
+first quarter of the band, a ~92 x 16 px blob at its left end, and the rest showed the clamped
+edge (alpha 0). That is the dark square. Why the Pixel shows nothing was not settled: in touch mode
+the arrows are hidden anyway (`updateArrows()` hides them when `_global.controller_icons` is false),
+and Mali may sample the clamped edge differently.
+
+**Other textures with the same mismatch** (all Android movies scanned: image tags 1001 against the
+`OGLES/Munged/ui/flash/<movie>/<name>.Txtr~c` textures; the container is a 64-byte header, then zlib,
+then the engine's header and a DDS):
+
+| Movie | Image | Declared | Android texture |
+|---|---|---|---|
+| Notebook, Notebook_DLC | `page_fade.dds` | 128x64 | 32x16 |
+| Notebook, Notebook_DLC | `noStamp.dds` (empty Battle Stamps slots) | 64x64 | 16x16 |
+| BattleHUD, BattleHUD_DLC | `life_meter_good.dds` | 64x16 | 32x8 |
+| Credits | `fade_img.dds` | 256x128 | 64x32 |
+| Pause | `coverup.tga` | 128x128 | 64x64 |
+
+**The fix.** `host/src/gamepad.cpp` already relabelled the Xbox A icon's texture (64x64 drawn as a
+32x32 icon). That is now general: `FlashImageCreator::CreateImage` and `RsRef<Texture>::BindFile`
+are hooked always (not only with the icon library), and when an image's texture is the declared
+size divided by a power of two in both directions, the Texture's size (+0x24/+0x26) and the
+`GImageInfo`'s (+0x1c/+0x20) are set to the declared size (`fit_declared_size`; the log says
+"gamepad: image: 32x16 texture drawn as its declared 128x64"). The shadow is now a soft band along
+the whole bottom (and, when scrolled, top) of the list, as the artwork intends.
+
+Tested on Windows (2026-10-16): the Quests page shows the band, no square; the Battle Stamps page's
+empty slots fill their squares; a battle's life meters fill their bars. Android: not built.
 
 ## Rebuilding the scripts
 

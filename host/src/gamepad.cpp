@@ -322,6 +322,8 @@ u32 g_image_d0_orig, g_image_d1_orig;  // GImageInfo destructors
 std::mutex g_images_mutex;
 std::unordered_map<u32, std::string> g_images;  // live icon GImageInfo -> icon key (see icon_key)
 thread_local std::string t_bound_icon;          // icon key of the texture CreateImage just bound
+thread_local u32 t_bound_ref;                   // RsRef<Texture> handle CreateImage just bound
+bool g_icons_ready;                             // datapatch built the icon library
 
 bool starts_with_ci(const char *s, const char *prefix) { return strncasecmp(s, prefix, strlen(prefix)) == 0; }
 
@@ -395,7 +397,7 @@ u32 guest_string(const std::string &s) {
 
 // RsRef<Texture> RsRef<Texture>::BindFile(const char *path, bool)
 u32 t_bind_texture(u32 path, u32 flag) {
-    std::string key = icon_key((const char *)g2h(path));
+    std::string key = g_icons_ready ? icon_key((const char *)g2h(path)) : "";
     if (!key.empty()) {
         std::string mapped = icon_path(key, g_icon_set.load(std::memory_order_relaxed));
         if (strcasecmp(mapped.c_str(), (const char *)g2h(path)) != 0) {
@@ -405,7 +407,7 @@ u32 t_bind_texture(u32 path, u32 flag) {
         }
     }
     t_bound_icon = std::move(key);
-    return cpu::call32(g_bind_texture_orig, {path, flag});
+    return t_bound_ref = cpu::call32(g_bind_texture_orig, {path, flag});
 }
 
 // The loaded Texture for a path, labelled with the size its image declares: images get their
@@ -429,16 +431,40 @@ u32 icon_texture(const std::string &path, u32 w, u32 h) {
     return tex;
 }
 
+// A texture the Android data ships smaller than the movie declares its image: the journal's
+// page_fade (the "more above / below" shadow on the Quests page) is a 32x16 texture for a 128x64
+// image. GFx maps the fill by the texture's own size, so the gradient covered only the first
+// quarter of the band in each direction and showed as a dark square in its corner (where the GPU
+// clamps the coordinates; see docs/menu-fixes.md). Like the icons, the texture is relabelled with
+// the declared size when that is the same shape scaled by a power of two.
+void fit_declared_size(u32 ref, u32 image, u16 w, u16 h) {
+    static thread_local u32 slot = mem::halloc(4, 4);
+    wr<u32>(slot, ref);
+    u32 tex = cpu::call32(g_texture_lock, {slot});
+    if (!tex) return;
+    u16 tw = rd<u16>(tex + 0x24), th = rd<u16>(tex + 0x26);
+    if (!tw || !th || (tw == w && th == h) || w % tw || h % th || w / tw != h / th || (w / tw & (w / tw - 1))) return;
+    LOGI("gamepad: image: %ux%u texture drawn as its declared %ux%u", tw, th, w, h);
+    wr<u16>(tex + 0x24, w), wr<u16>(tex + 0x26, h);
+    wr<u32>(image + 0x1c, w), wr<u32>(image + 0x20, h);  // GImageInfo Width, Height
+}
+
 // GImageInfo *FlashImageCreator::CreateImage(const GFxImageCreateInfo &)
-// For icon images, uses the size the movie declares (see icon_texture) and remembers the image.
+// For icon images, uses the size the movie declares (see icon_texture) and remembers the image;
+// other images get fit_declared_size().
 u32 t_create_image(u32 self, u32 info) {
     t_bound_icon.clear();
+    t_bound_ref = 0;
     u32 image = cpu::call32(g_create_image_orig, {self, info});
     std::string key = std::move(t_bound_icon);
     u32 file_info = rd<u32>(info + 0xc);
-    if (!image || key.empty() || rd<u32>(info) != 2 || !file_info) return image;
+    if (!image || rd<u32>(info) != 2 || !file_info) return image;
     u16 w = rd<u16>(file_info + 0x1c), h = rd<u16>(file_info + 0x1e);  // declared size
     if (!w || !h) return image;
+    if (key.empty()) {
+        if (t_bound_ref) fit_declared_size(t_bound_ref, image, w, h);
+        return image;
+    }
     icon_texture(icon_path(key, g_icon_set.load(std::memory_order_relaxed)), w, h);
     wr<u32>(image + 0x1c, w), wr<u32>(image + 0x20, h);  // GImageInfo Width, Height
     std::lock_guard<std::mutex> lock(g_images_mutex);
@@ -554,12 +580,13 @@ void install(Module *cq) {
     g_name_show_pc = name("ShowPCButtons");
     g_name_minigame_visible = name("MinigameVisible");
     g_name_last_costume = name("_lastCurrentCostume");
+    g_bind_texture_orig = hook_arm(cq, "_ZN5RsRefI7TextureE8BindFileEPKcb",
+                                   cpu::add_thunk("pad_bind_texture", &abi::wrapped<t_bind_texture>));
+    g_texture_lock = need("_ZNK5RsRefI7TextureE4LockEv");
+    g_create_image_orig = hook_arm(cq, "_ZN17FlashImageCreator11CreateImageERK18GFxImageCreateInfo",
+                                   cpu::add_thunk("pad_create_image", &abi::wrapped<t_create_image>));
     if (datapatch::icon_library_ready()) {
-        g_bind_texture_orig = hook_arm(cq, "_ZN5RsRefI7TextureE8BindFileEPKcb",
-                                       cpu::add_thunk("pad_bind_texture", &abi::wrapped<t_bind_texture>));
-        g_texture_lock = loader::lookup_in(cq, "_ZNK5RsRefI7TextureE4LockEv");
-        g_create_image_orig = hook_arm(cq, "_ZN17FlashImageCreator11CreateImageERK18GFxImageCreateInfo",
-                                       cpu::add_thunk("pad_create_image", &abi::wrapped<t_create_image>));
+        g_icons_ready = true;
         g_image_d0_orig = hook_arm(cq, "_ZN10GImageInfoD0Ev", cpu::add_thunk("pad_image_d0", &abi::wrapped<t_image_d0>));
         g_image_d1_orig = hook_arm(cq, "_ZN10GImageInfoD1Ev", cpu::add_thunk("pad_image_d1", &abi::wrapped<t_image_d1>));
         g_create_platform_texture = need("_ZN12FlashManager21CreatePlatformTextureEP7Texture");
