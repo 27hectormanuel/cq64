@@ -199,8 +199,15 @@ old CRC and works); the new entries carry correct ones anyway.
   followed; `stick ry -1` scrolled it back. The Active Quests list fits its page in that save
   (no scrollbar), so the left stick had nothing to scroll. Touches on the Deck's screen happened
   during the run (the log's "controller input after a touch"), so the touch side was used but not
-  checked on its own. **Not yet tried:** the stamp shop (it needs more than 5 stamps for sale),
-  touch dragging of the quest lists, Android.
+  checked on its own.
+- **Stamp shop, same run:** with the console, `debug.CompleteMission('Burbs_MQ_01/Burbs_MQ_01_Intro')`
+  (Robot Repair) and `debug.CompleteMission('L_010/L_010_NoCostume')`, `game.AddCandyAmount(5000)`,
+  `game.AddExperiencePoints(10000)`: 7 stamps for sale (unlocked, seller count > 0: Bloodshot
+  Eyeballs, Pumpkin Guts, Disembodied Hand, Egg, Moving Tombstone, Black Cat, Fang of the Wolf).
+  The shop opened as Sadie opens it (`game.SetIngameGUIState(kIngameGUIState_StampShop)`). Down
+  with the controller went past the 5th stamp: the list scrolled and the 7th (Fang of the Wolf)
+  was selected, with the up arrow showing; Up went back to the first and the list scrolled back.
+- **Not yet tried:** touch dragging of the quest lists, the shop's touch arrows, Android.
 - Opening the journal from Lua (`game.SetIngameGUIState(kIngameGUIState_Notebook)`) before a
   save has finished loading crashes the game in `IngameGUIManager::LoadNotebook()` (null-page read
   at 0x14: no active session yet, `SessionManager::GetActiveSession()` returns null). A test
