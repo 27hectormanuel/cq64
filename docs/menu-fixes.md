@@ -207,7 +207,18 @@ old CRC and works); the new entries carry correct ones anyway.
   The shop opened as Sadie opens it (`game.SetIngameGUIState(kIngameGUIState_StampShop)`). Down
   with the controller went past the 5th stamp: the list scrolled and the 7th (Fang of the Wolf)
   was selected, with the up arrow showing; Up went back to the first and the list scrolled back.
-- **Not yet tried:** touch dragging of the quest lists, the shop's touch arrows, Android.
+- **Active Quests (left page), same run:** the Suburbs missions were started from the console so
+  the page overflows. A mission only shows there with a description and at least one objective:
+  `game.CancelMission(game.GetMission('Burbs_MQ_03/Burbs_MQ_03'))`, then (as a separate console
+  command; in the same one the restart doesn't stick)
+  `game.StartMainMission(code, 1, NameLineCode, DescLineCode)` with the texts from
+  `g_QuestDescriptors`, then `game.AddQuestObjective(RESOURCE('Gameplay/QuestObjectives/<name>.Quest'),
+  game.GetMission(id))`. With 8 missions listed, the virtual left stick (`stick ly 1`) scrolled
+  the list down to the end and `stick ly -1` back up; the scrollbar followed. The L / R hint
+  arrows under the pages stay as they were when the journal opened (`updateArrows()` runs only in
+  `onLoad`, on PC too).
+- **Not yet tried:** touch dragging of the quest lists, the shop's touch arrows, the Deck's own
+  sticks (only the test input's virtual stick), Android.
 - Opening the journal from Lua (`game.SetIngameGUIState(kIngameGUIState_Notebook)`) before a
   save has finished loading crashes the game in `IngameGUIManager::LoadNotebook()` (null-page read
   at 0x14: no active session yet, `SessionManager::GetActiveSession()` returns null). A test
