@@ -12,7 +12,15 @@
 // mobile icons and Xbox360_ControllerIcons.gfx's is built from those two files at startup and
 // spliced over Mobile_InputIcons.gfx (the engine preloads that file as a shared movie; a copy
 // elsewhere would not get its textures), padded to its size.
+//
+// Two movies get a script added (host/ui/*.as, compiled into menu_fixes_action.h): the journal
+// (Notebook_DLC.gfx) and the stamp shop (StampShop_DLC.gfx). They are compressed already, so the
+// rebuilt movie is a little bigger than the original. Each one sits right after its non-DLC
+// version (Notebook.gfx, StampShop.gfx), which the game never loads (the engine names only the
+// _DLC movies), so the rebuilt movie is served from there, with a new local header, and its
+// directory entry is pointed at it. See docs/menu-fixes.md.
 #include "datapatch.h"
+#include "menu_fixes_action.h"
 
 #include <zlib.h>
 
@@ -33,17 +41,10 @@ struct Patch {
     std::vector<u8> old_bytes, new_bytes;
 };
 
-const Patch PATCHES[] = {
-    // FrontEnd.gfx, MenuItem "Focus" frame: the selection box's colour transform tints its
-    // (dark) texture red (green/blue x0, red +200). Make it white instead, as on PC: colour x0 +255.
-    {"Data/UI/FrontEnd/Opt/FrontEnd.gfx", 0x892,
-     {0xe9, 0x00, 0x00, 0x00, 0x03, 0x98, 0xc8, 0x00, 0x00, 0x00, 0x00},
-     {0xe8, 0x00, 0x00, 0x00, 0x03, 0x98, 0xff, 0x3f, 0xcf, 0xf0, 0x00}},
-    // Pause.gfx: the same selection box in the in-game menu.
-    {"Data/UI/Pause/Opt/Pause.gfx", 0xc04,
-     {0xe9, 0x00, 0x00, 0x00, 0x03, 0x98, 0xc8, 0x00, 0x00, 0x00, 0x00},
-     {0xe8, 0x00, 0x00, 0x00, 0x03, 0x98, 0xff, 0x3f, 0xcf, 0xf0, 0x00}},
-};
+// None at the moment. The main menu's and pause menu's selection box (FrontEnd.gfx +0x892,
+// Pause.gfx +0xc04: a colour transform, red +200 over a dark texture) used to be made white here
+// to match PC; it is red again, as Double Fine shipped it on Android.
+const std::vector<Patch> PATCHES;
 
 struct Located {
     s64 pos;  // absolute offset in the pack file
@@ -160,7 +161,7 @@ std::vector<u8> write_movie(const Movie &m) {
     u32 total = body.size() + 8;
     for (int i = 0; i < 4; i++) out[4 + i] = total >> (8 * i);
     if (compress2(out.data() + 8, &clen, body.data(), body.size(), 9) != Z_OK) {
-        LOGW("datapatch: icon library: compression failed");
+        LOGW("datapatch: movie compression failed");
         return {};
     }
     out.resize(8 + clen);
@@ -291,6 +292,133 @@ bool read_member(int fd, s64 base, s64 size, const char *name, std::vector<u8> &
     return pread_all(fd, out.data(), len, m);
 }
 
+// ---- movies with a script added (menu_fixes_action.h)
+
+struct Entry {
+    s64 cd_pos = -1;  // absolute offset of the central directory entry
+    s64 lho = -1;     // absolute offset of the local header
+    u8 cd[46], lh[30];
+};
+
+// Calls f(name, cd entry, absolute cd entry offset) for every member of the zip in
+// [base, base + size); false if its central directory can't be read.
+template <class F> bool each_entry(int fd, s64 base, s64 size, F f) {
+    u8 tail[65557];
+    s64 tlen = size < (s64)sizeof tail ? size : (s64)sizeof tail;
+    if (!pread_all(fd, tail, tlen, base + size - tlen)) return false;
+    s64 eocd = -1;
+    for (s64 i = tlen - 22; i >= 0; i--)
+        if (le32(tail + i) == 0x06054b50) { eocd = i; break; }
+    if (eocd < 0) return false;
+    u32 count = le16(tail + eocd + 10), cd_size = le32(tail + eocd + 12), cd_off = le32(tail + eocd + 16);
+    std::vector<u8> cd(cd_size);
+    if (!pread_all(fd, cd.data(), cd_size, base + cd_off)) return false;
+    for (u32 i = 0, p = 0; i < count && p + 46 <= cd_size; i++) {
+        const u8 *e = cd.data() + p;
+        if (le32(e) != 0x02014b50) return false;
+        u16 n = le16(e + 28), x = le16(e + 30), c = le16(e + 32);
+        f(std::string((const char *)e + 46, n), e, base + cd_off + p);
+        p += 46 + n + x + c;
+    }
+    return true;
+}
+
+// Rebuilds `member` (a stored movie) with `action` (a DoAction tag with its 6-byte header) added
+// after its frame-1 script, and serves it from the local header of `donor`, a movie the game
+// never loads that lies before it. The entries from the donor up to the member (the donor and
+// empty folder entries, as in the game's pack) are kept valid as empty entries: each gets a new
+// local header after the movie and its directory entry points there. So every directory entry
+// still leads to a matching local header and no two overlap.
+void build_fixed(int fd, s64 base, s64 size, const char *member, const char *donor, const u8 *action,
+                 size_t action_len) {
+    struct Moved {
+        std::string name;
+        s64 cd_pos, lho;
+        u8 cd[46];
+        u32 len;
+    };
+    Entry m, d;
+    std::vector<Moved> all;
+    if (!each_entry(fd, base, size, [&](const std::string &name, const u8 *e, s64 at) {
+            Moved v{name, at, base + le32(e + 42), {}, le32(e + 24)};
+            memcpy(v.cd, e, 46);
+            if (name == member) m.cd_pos = at, m.lho = v.lho, memcpy(m.cd, e, 46);
+            if (name == donor) d.cd_pos = at, d.lho = v.lho, memcpy(d.cd, e, 46);
+            all.push_back(std::move(v));
+        })) {
+        LOGW("datapatch: %s: pack directory unreadable", member);
+        return;
+    }
+    if (m.cd_pos < 0 || d.cd_pos < 0 || d.lho >= m.lho || le16(m.cd + 10) != 0 ||
+        !pread_all(fd, m.lh, 30, m.lho) || le32(m.lh) != 0x04034b50) {
+        LOGW("datapatch: %s or %s not found as expected; not fixed", member, donor);
+        return;
+    }
+    std::vector<Moved> moved;  // the donor and what lies between it and the member
+    for (Moved &v : all)
+        if (v.lho >= d.lho && v.lho < m.lho) {
+            if (v.cd_pos != d.cd_pos && v.len != 0) {
+                LOGW("datapatch: %s: %s lies between it and %s; not fixed", member, v.name.c_str(), donor);
+                return;
+            }
+            moved.push_back(std::move(v));
+        }
+    u32 len = le32(m.cd + 24);
+    s64 data = m.lho + 30 + le16(m.lh + 26) + le16(m.lh + 28), end = data + len;
+    std::vector<u8> file(len);
+    Movie mv;
+    if (len > (1 << 20) || !pread_all(fd, file.data(), len, data) || !parse_movie(file, mv)) {
+        LOGW("datapatch: %s unreadable; not fixed", member);
+        return;
+    }
+    auto frame_end = std::find_if(mv.tags.begin(), mv.tags.end(),
+                                  [](const Tag &t) { return t.code == TAG_SHOW_FRAME || t.code == TAG_END; });
+    mv.tags.insert(frame_end, Tag{12, std::vector<u8>(action + 6, action + action_len)});
+    std::vector<u8> out = write_movie(mv);
+    if (out.empty()) return;
+    auto put32 = [](u8 *p, u32 v) { for (int i = 0; i < 4; i++) p[i] = v >> (8 * i); };
+    // A local header (from `lh`, without extra field) and the name; the directory entry `cd` is
+    // pointed at it with the same CRC and size.
+    std::vector<u8> blob;
+    auto add_entry = [&](const u8 *lh, u8 *cd, s64 cd_pos, u32 crc, u32 n) {
+        u16 name_len = le16(cd + 28);
+        std::vector<u8> name(name_len);
+        if (!pread_all(fd, name.data(), name_len, cd_pos + 46)) return false;
+        put32(cd + 16, crc), put32(cd + 20, n), put32(cd + 24, n), put32(cd + 42, (u32)(d.lho + blob.size() - base));
+        size_t at = blob.size();
+        blob.insert(blob.end(), lh, lh + 30);
+        put32(&blob[at + 14], crc), put32(&blob[at + 18], n), put32(&blob[at + 22], n), put16(&blob[at + 28], 0);
+        blob.insert(blob.end(), name.begin(), name.end());
+        return true;
+    };
+    std::vector<u8> mcd(m.cd, m.cd + 46);
+    if (!add_entry(m.lh, mcd.data(), m.cd_pos, crc32(0, out.data(), out.size()), out.size())) return;
+    blob.insert(blob.end(), out.begin(), out.end());
+    std::vector<std::vector<u8>> cds;
+    for (Moved &v : moved) {
+        u8 lh[30];
+        if (!pread_all(fd, lh, 30, v.lho) || le32(lh) != 0x04034b50) {
+            LOGW("datapatch: %s: %s has no local header; not fixed", member, v.name.c_str());
+            return;
+        }
+        cds.emplace_back(v.cd, v.cd + 46);
+        if (!add_entry(lh, cds.back().data(), v.cd_pos, 0, 0)) return;
+    }
+    if (d.lho + (s64)blob.size() > end) {
+        LOGW("datapatch: %s with its fix doesn't fit (%zu bytes)", member, out.size());
+        return;
+    }
+    g_generated.push_back(std::move(blob));
+    g_located.push_back({d.lho, &g_generated.back()});
+    g_generated.push_back(std::move(mcd));
+    g_located.push_back({m.cd_pos, &g_generated.back()});
+    for (size_t i = 0; i < moved.size(); i++) {
+        g_generated.push_back(std::move(cds[i]));
+        g_located.push_back({moved[i].cd_pos, &g_generated.back()});
+    }
+    LOGI("datapatch: %s: fix added (%u -> %zu bytes, served from %s's place)", member, len, out.size(), donor);
+}
+
 void build_icons(int fd, s64 base, s64 size) {
     std::vector<u8> mobile, xbox;
     s64 slot_pos = 0;
@@ -338,6 +466,10 @@ void init(const std::string &pack_path) {
         LOGI("datapatch: %s +0x%x", p.member, p.offset);
     }
     build_icons(fd, inner, inner_size);
+    build_fixed(fd, inner, inner_size, "Data/UI/Notebook_DLC/Opt/Notebook_DLC.gfx", "Data/UI/Notebook/Opt/Notebook.gfx",
+                kNotebookFix, sizeof kNotebookFix);
+    build_fixed(fd, inner, inner_size, "Data/UI/StampShop_DLC/Opt/StampShop_DLC.gfx",
+                "Data/UI/StampShop/Opt/StampShop.gfx", kStampShopFix, sizeof kStampShopFix);
     g_dev = st.st_dev;
     g_ino = st.st_ino;
     close(fd);
