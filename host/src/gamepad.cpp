@@ -42,6 +42,7 @@
 #include <strings.h>
 #include <string>
 #include <unordered_map>
+#include <vector>
 #include <unistd.h>
 
 namespace gamepad {
@@ -501,9 +502,91 @@ void switch_icons() {
     LOGI("gamepad: %zu icon images switched to %s", g_images.size(), set == 1 ? "PlayStation" : "Xbox");
 }
 
+// ---- where the action map goes (PC: ButtonMapScreenXCenter / YCenter)
+//
+// With a controller, the PC battle HUD draws the action map (X / Y / B and their labels) around a
+// point on the active fighter: Battle_PushFlashVars (Cq.exe 1.0.0.11 FUN_004222e0) projects that
+// fighter's head (the Head bone, else Driver_Head, else the root; FUN_00421e40) to the screen and
+// pushes it, in the HUD's 1280x720 units, as ButtonMapScreenXCenter / YCenter. Android dropped
+// those two variables. Its Battle_PushFlashVars still projects each fighter's head for
+// BattleActorsScreenPosX / Y (the damage numbers), with the height replaced by 5.0, as the PC
+// does for that array. So while it runs, the head's real height is taken from
+// Skeleton::GetWorldTransform, each projection is repeated with it, and the active fighter's
+// (g_BattleActiveActor) result is pushed under the PC's names for the HUD script (battlehud_fix.as).
+u32 g_world_xform_orig, g_to_screen_orig, g_set_float, g_name_map_x, g_name_map_y, g_battle_actors, g_active_actor;
+bool g_in_push;           // inside Battle_PushFlashVars (game thread)
+bool g_head_valid;        // a head position was found since the last projection
+float g_head_y;
+std::vector<std::pair<float, float>> g_heads;  // projections with the real height, in call order
+
+// bool Skeleton::GetWorldTransform(VQTransform &out, const Name &bone) const
+u32 t_world_xform(u32 skeleton, u32 out, u32 bone) {
+    u32 found = cpu::call32(g_world_xform_orig, {skeleton, out, bone}) & 0xff;
+    if (g_in_push && found) g_head_y = rd<float>(out + 4), g_head_valid = true;  // VQTransform: position first
+    return found;
+}
+
+// vec3 CoCamera::Proxy::WorldCoordsToScreen(const vec3 &world) const (r0: the result)
+void t_to_screen(u32 result, u32 proxy, u32 world) {
+    cpu::call32(g_to_screen_orig, {result, proxy, world});
+    if (!g_in_push) return;
+    float x = rd<float>(result), y = rd<float>(result + 4);
+    if (g_head_valid) {
+        static const u32 in = mem::halloc(16, 4), out = mem::halloc(16, 4);
+        wr<float>(in, rd<float>(world)), wr<float>(in + 4, g_head_y), wr<float>(in + 8, rd<float>(world + 8));
+        cpu::call32(g_to_screen_orig, {out, proxy, in});
+        x = rd<float>(out), y = rd<float>(out + 4);
+    }
+    g_heads.push_back({x * 1280.0f, y * 720.0f});
+    g_head_valid = false;
+}
+
+// ---- running away
+//
+// The PC version runs away as soon as LT + RT are held (Cq.exe has no confirmation for it).
+// Android asks first: Battle_HandleInput opens ModalDialog type 4 ("Are you sure? Run away! Run
+// away!", Yes! / No!) with BattleInput_RunAwayCallback, for its touch button. MessageBox.gfx only
+// takes A for types 1 and 3 and B for types 2 and 3, so with a controller that dialog could not be
+// answered at all. In controller mode the dialog is skipped and the callback gets "yes" (1) at
+// once, as on PC; touch keeps the question.
+u32 g_modal_show_orig, g_run_away_cb;
+
+// void ModalDialog::Show(const char *title, const char *text, ModalDialogType, callback, void *)
+void t_modal_show(u32 self, u32 title, u32 text, u32 type, u32 callback, u32 context) {
+    if (callback == g_run_away_cb && rd<u8>(B.is_gamepad)) {
+        LOGI("gamepad: run away (LT + RT), no question asked, as on PC");
+        cpu::call32(callback, {1, context});
+        return;
+    }
+    cpu::call32(g_modal_show_orig, {self, title, text, type, callback, context});
+}
+
+u32 bits_of(float f) {
+    u32 u;
+    memcpy(&u, &f, 4);
+    return u;
+}
+
 // void Battle_PushFlashVars(FlashValueSnapshot *)
 void t_push_vars(u32 snapshot) {
+    g_heads.clear();
+    g_head_valid = false;
+    g_in_push = g_to_screen_orig != 0;
     cpu::call32(g_push_vars_orig, {snapshot});
+    g_in_push = false;
+    if (g_to_screen_orig) {
+        // The projections run for the fighters present (BattleActors 0..5), in order.
+        s32 active = rd<s32>(g_active_actor);
+        size_t k = 0;
+        float mx = -1280, my = -720;
+        for (s32 i = 0; i < 6 && k < g_heads.size(); i++) {
+            if (!rd<u32>(g_battle_actors + 4 * i)) continue;
+            if (i == active) mx = g_heads[k].first, my = g_heads[k].second;
+            k++;
+        }
+        cpu::call32(g_set_float, {snapshot, g_name_map_x, bits_of(mx)});
+        cpu::call32(g_set_float, {snapshot, g_name_map_y, bits_of(my)});
+    }
     u32 show_pc = rd<u8>(B.is_gamepad) == 0;
     static u32 logged = 2;
     if (show_pc != logged) LOGI("gamepad: battle HUD ShowPCButtons=%u", logged = show_pc);
@@ -580,6 +663,18 @@ void install(Module *cq) {
     g_name_show_pc = name("ShowPCButtons");
     g_name_minigame_visible = name("MinigameVisible");
     g_name_last_costume = name("_lastCurrentCostume");
+    g_name_map_x = name("ButtonMapScreenXCenter");
+    g_name_map_y = name("ButtonMapScreenYCenter");
+    g_set_float = need("_ZN18FlashValueSnapshot17SetGlobalVariableERK4Namef");
+    g_battle_actors = need("g_BattleActors");
+    g_active_actor = need("g_BattleActiveActor");
+    g_world_xform_orig = hook_arm(cq, "_ZNK8Skeleton17GetWorldTransformER11VQTransformRK4Name",
+                                  cpu::add_thunk("pad_world_xform", &abi::wrapped<t_world_xform>));
+    g_to_screen_orig = hook_arm(cq, "_ZNK8CoCamera5Proxy19WorldCoordsToScreenERK4vec3",
+                                cpu::add_thunk("pad_to_screen", &abi::wrapped<t_to_screen>));
+    g_run_away_cb = need("_Z27BattleInput_RunAwayCallback15ModalDialogTypePv");
+    g_modal_show_orig = hook_arm(cq, "_ZN11ModalDialog4ShowEPKcS1_15ModalDialogTypePFvS2_PvES3_",
+                                 cpu::add_thunk("pad_modal_show", &abi::wrapped<t_modal_show>));
     g_bind_texture_orig = hook_arm(cq, "_ZN5RsRefI7TextureE8BindFileEPKcb",
                                    cpu::add_thunk("pad_bind_texture", &abi::wrapped<t_bind_texture>));
     g_texture_lock = need("_ZNK5RsRefI7TextureE4LockEv");
