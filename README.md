@@ -33,8 +33,10 @@ Both were tested on a Pixel 8 Pro (Android 17, arm64, Mali GPU).
     extras.
   - Costume Quest extras: a revived Lua debug console, FPS counter and frame cap, 16:9 render
     resolution picker, game controller support including battle prompts judged like the PC
-    version, and small patches applied to the data pack as it is read (white menu highlight;
-    a button icon library with the Xbox controller icons added to the mobile ones).
+    version and the PC's battle screen layout with a controller, and patches applied to the data
+    pack as it is read (a button icon library with the Xbox controller icons added to the mobile
+    ones; journal, stamp shop and battle HUD fixes for controllers, see
+    [docs/menu-fixes.md](docs/menu-fixes.md) and [docs/battle-controller.md](docs/battle-controller.md)).
 - **`guest/`** — `libguestrt.so`, a tiny ARM32 runtime (string functions, `printf` family,
   dlmalloc, setjmp, compiler-rt helpers) loaded next to the game in place of 32-bit bionic.
 - **`java_patch/`** — `HostLoader` (loads `libcqhost` instead of the 32-bit libraries) and a
@@ -109,7 +111,7 @@ There are two variants to choose from:
 | Variant | What you get | Output |
 |---|---|---|
 | **original** | The game 1:1 as the 32-bit APK plays it: touch only, no developer menu, no data changes. Only what running it on a 64-bit-only phone needs is changed (and a repack's androeed.ru splash is removed). | `out/costumequest64-original.apk` |
-| **optimized** | Controller support with PC-style battle prompts and Xbox button icons, developer menu (Lua console, FPS counter, frame cap, render resolution), full screen, Game Mode, white menu highlight. | `out/costumequest64.apk` |
+| **optimized** | Controller support with PC-style battle prompts and Xbox button icons, developer menu (Lua console, FPS counter, frame cap, render resolution), full screen, Game Mode, controller fixes for the journal, stamp shop and battle screen. | `out/costumequest64.apk` |
 
 One step (fetches the dependencies if needed, decompiles your APK, builds a full APK for phones
 and the emulator; asks for the variant if you leave it out):

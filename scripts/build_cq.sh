@@ -8,7 +8,7 @@
 #              only the changes needed to run it on 64-bit-only phones
 #   optimized  controller support with PC-style battle prompts and button icons, developer menu
 #              (Lua console, FPS counter, frame cap, render resolution), full screen, Game Mode,
-#              white menu highlight
+#              journal, stamp shop and battle screen fixes for controllers
 #   --split    small APK + separate data pack (out/cqdata.zip), installed with
 #              scripts/install_split.sh, for phones without room for the ~1.1 GB APK
 #   --abi      arm64-v8a (phones) and/or x86_64 (the Android emulator); default: both

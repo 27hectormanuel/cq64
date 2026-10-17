@@ -4,7 +4,7 @@
 #   scripts/build_apk.sh [abi...]      default ABIs: arm64-v8a x86_64
 # VARIANT=optimized (default): controller support (with PC-style battle prompts and button icons),
 #   developer menu (Lua console, FPS counter, frame cap, render resolution), full screen, Game Mode,
-#   white menu highlight. Output: $OUT_DIR/costumequest64.apk
+#   controller fixes for the journal, stamp shop and battle screen. Output: $OUT_DIR/costumequest64.apk
 # VARIANT=original: the game exactly as the 32-bit APK plays it, with only the changes running it on
 #   a 64-bit-only phone needs (and without the repack's androeed.ru splash, if present).
 #   Output: $OUT_DIR/costumequest64-original.apk

@@ -42,6 +42,7 @@
 #include <strings.h>
 #include <string>
 #include <unordered_map>
+#include <vector>
 #include <unistd.h>
 
 namespace gamepad {
@@ -69,6 +70,7 @@ u32 g_handle_input_orig, g_push_vars_orig;  // trampolines to the hooked origina
 u32 g_set_bool;                             // FlashValueSnapshot::SetGlobalVariable(Name const&, bool)
 u32 g_name_show_pc;                         // guest Name holding "ShowPCButtons"
 u32 g_name_minigame_visible;                // guest Name holding "MinigameVisible"
+u32 g_name_last_costume;                    // guest Name holding "_lastCurrentCostume"
 std::atomic<u32> g_pressed{0};              // buttons pressed since the game thread last looked
 u32 g_bind_texture_orig;
 u32 g_create_image_orig;  // FlashImageCreator::CreateImage
@@ -321,6 +323,8 @@ u32 g_image_d0_orig, g_image_d1_orig;  // GImageInfo destructors
 std::mutex g_images_mutex;
 std::unordered_map<u32, std::string> g_images;  // live icon GImageInfo -> icon key (see icon_key)
 thread_local std::string t_bound_icon;          // icon key of the texture CreateImage just bound
+thread_local u32 t_bound_ref;                   // RsRef<Texture> handle CreateImage just bound
+bool g_icons_ready;                             // datapatch built the icon library
 
 bool starts_with_ci(const char *s, const char *prefix) { return strncasecmp(s, prefix, strlen(prefix)) == 0; }
 
@@ -394,7 +398,7 @@ u32 guest_string(const std::string &s) {
 
 // RsRef<Texture> RsRef<Texture>::BindFile(const char *path, bool)
 u32 t_bind_texture(u32 path, u32 flag) {
-    std::string key = icon_key((const char *)g2h(path));
+    std::string key = g_icons_ready ? icon_key((const char *)g2h(path)) : "";
     if (!key.empty()) {
         std::string mapped = icon_path(key, g_icon_set.load(std::memory_order_relaxed));
         if (strcasecmp(mapped.c_str(), (const char *)g2h(path)) != 0) {
@@ -404,7 +408,7 @@ u32 t_bind_texture(u32 path, u32 flag) {
         }
     }
     t_bound_icon = std::move(key);
-    return cpu::call32(g_bind_texture_orig, {path, flag});
+    return t_bound_ref = cpu::call32(g_bind_texture_orig, {path, flag});
 }
 
 // The loaded Texture for a path, labelled with the size its image declares: images get their
@@ -428,16 +432,40 @@ u32 icon_texture(const std::string &path, u32 w, u32 h) {
     return tex;
 }
 
+// A texture the Android data ships smaller than the movie declares its image: the journal's
+// page_fade (the "more above / below" shadow on the Quests page) is a 32x16 texture for a 128x64
+// image. GFx maps the fill by the texture's own size, so the gradient covered only the first
+// quarter of the band in each direction and showed as a dark square in its corner (where the GPU
+// clamps the coordinates; see docs/menu-fixes.md). Like the icons, the texture is relabelled with
+// the declared size when that is the same shape scaled by a power of two.
+void fit_declared_size(u32 ref, u32 image, u16 w, u16 h) {
+    static thread_local u32 slot = mem::halloc(4, 4);
+    wr<u32>(slot, ref);
+    u32 tex = cpu::call32(g_texture_lock, {slot});
+    if (!tex) return;
+    u16 tw = rd<u16>(tex + 0x24), th = rd<u16>(tex + 0x26);
+    if (!tw || !th || (tw == w && th == h) || w % tw || h % th || w / tw != h / th || (w / tw & (w / tw - 1))) return;
+    LOGI("gamepad: image: %ux%u texture drawn as its declared %ux%u", tw, th, w, h);
+    wr<u16>(tex + 0x24, w), wr<u16>(tex + 0x26, h);
+    wr<u32>(image + 0x1c, w), wr<u32>(image + 0x20, h);  // GImageInfo Width, Height
+}
+
 // GImageInfo *FlashImageCreator::CreateImage(const GFxImageCreateInfo &)
-// For icon images, uses the size the movie declares (see icon_texture) and remembers the image.
+// For icon images, uses the size the movie declares (see icon_texture) and remembers the image;
+// other images get fit_declared_size().
 u32 t_create_image(u32 self, u32 info) {
     t_bound_icon.clear();
+    t_bound_ref = 0;
     u32 image = cpu::call32(g_create_image_orig, {self, info});
     std::string key = std::move(t_bound_icon);
     u32 file_info = rd<u32>(info + 0xc);
-    if (!image || key.empty() || rd<u32>(info) != 2 || !file_info) return image;
+    if (!image || rd<u32>(info) != 2 || !file_info) return image;
     u16 w = rd<u16>(file_info + 0x1c), h = rd<u16>(file_info + 0x1e);  // declared size
     if (!w || !h) return image;
+    if (key.empty()) {
+        if (t_bound_ref) fit_declared_size(t_bound_ref, image, w, h);
+        return image;
+    }
     icon_texture(icon_path(key, g_icon_set.load(std::memory_order_relaxed)), w, h);
     wr<u32>(image + 0x1c, w), wr<u32>(image + 0x20, h);  // GImageInfo Width, Height
     std::lock_guard<std::mutex> lock(g_images_mutex);
@@ -474,13 +502,101 @@ void switch_icons() {
     LOGI("gamepad: %zu icon images switched to %s", g_images.size(), set == 1 ? "PlayStation" : "Xbox");
 }
 
+// ---- where the action map goes (PC: ButtonMapScreenXCenter / YCenter)
+//
+// With a controller, the PC battle HUD draws the action map (X / Y / B and their labels) around a
+// point on the active fighter: Battle_PushFlashVars (Cq.exe 1.0.0.11 FUN_004222e0) projects that
+// fighter's head (the Head bone, else Driver_Head, else the root; FUN_00421e40) to the screen and
+// pushes it, in the HUD's 1280x720 units, as ButtonMapScreenXCenter / YCenter. Android dropped
+// those two variables. Its Battle_PushFlashVars still projects each fighter's head for
+// BattleActorsScreenPosX / Y (the damage numbers), with the height replaced by 5.0, as the PC
+// does for that array. So while it runs, the head's real height is taken from
+// Skeleton::GetWorldTransform, each projection is repeated with it, and the active fighter's
+// (g_BattleActiveActor) result is pushed under the PC's names for the HUD script (battlehud_fix.as).
+u32 g_world_xform_orig, g_to_screen_orig, g_set_float, g_name_map_x, g_name_map_y, g_battle_actors, g_active_actor;
+bool g_in_push;           // inside Battle_PushFlashVars (game thread)
+bool g_head_valid;        // a head position was found since the last projection
+float g_head_y;
+std::vector<std::pair<float, float>> g_heads;  // projections with the real height, in call order
+
+// bool Skeleton::GetWorldTransform(VQTransform &out, const Name &bone) const
+u32 t_world_xform(u32 skeleton, u32 out, u32 bone) {
+    u32 found = cpu::call32(g_world_xform_orig, {skeleton, out, bone}) & 0xff;
+    if (g_in_push && found) g_head_y = rd<float>(out + 4), g_head_valid = true;  // VQTransform: position first
+    return found;
+}
+
+// vec3 CoCamera::Proxy::WorldCoordsToScreen(const vec3 &world) const (r0: the result)
+void t_to_screen(u32 result, u32 proxy, u32 world) {
+    cpu::call32(g_to_screen_orig, {result, proxy, world});
+    if (!g_in_push) return;
+    float x = rd<float>(result), y = rd<float>(result + 4);
+    if (g_head_valid) {
+        static const u32 in = mem::halloc(16, 4), out = mem::halloc(16, 4);
+        wr<float>(in, rd<float>(world)), wr<float>(in + 4, g_head_y), wr<float>(in + 8, rd<float>(world + 8));
+        cpu::call32(g_to_screen_orig, {out, proxy, in});
+        x = rd<float>(out), y = rd<float>(out + 4);
+    }
+    g_heads.push_back({x * 1280.0f, y * 720.0f});
+    g_head_valid = false;
+}
+
+// ---- running away
+//
+// The PC version runs away as soon as LT + RT are held (Cq.exe has no confirmation for it).
+// Android asks first: Battle_HandleInput opens ModalDialog type 4 ("Are you sure? Run away! Run
+// away!", Yes! / No!) with BattleInput_RunAwayCallback, for its touch button. MessageBox.gfx only
+// takes A for types 1 and 3 and B for types 2 and 3, so with a controller that dialog could not be
+// answered at all. In controller mode the dialog is skipped and the callback gets "yes" (1) at
+// once, as on PC; touch keeps the question.
+u32 g_modal_show_orig, g_run_away_cb;
+
+// void ModalDialog::Show(const char *title, const char *text, ModalDialogType, callback, void *)
+void t_modal_show(u32 self, u32 title, u32 text, u32 type, u32 callback, u32 context) {
+    if (callback == g_run_away_cb && rd<u8>(B.is_gamepad)) {
+        LOGI("gamepad: run away (LT + RT), no question asked, as on PC");
+        cpu::call32(callback, {1, context});
+        return;
+    }
+    cpu::call32(g_modal_show_orig, {self, title, text, type, callback, context});
+}
+
+u32 bits_of(float f) {
+    u32 u;
+    memcpy(&u, &f, 4);
+    return u;
+}
+
 // void Battle_PushFlashVars(FlashValueSnapshot *)
 void t_push_vars(u32 snapshot) {
+    g_heads.clear();
+    g_head_valid = false;
+    g_in_push = g_to_screen_orig != 0;
     cpu::call32(g_push_vars_orig, {snapshot});
+    g_in_push = false;
+    if (g_to_screen_orig) {
+        // The projections run for the fighters present (BattleActors 0..5), in order.
+        s32 active = rd<s32>(g_active_actor);
+        size_t k = 0;
+        float mx = -1280, my = -720;
+        for (s32 i = 0; i < 6 && k < g_heads.size(); i++) {
+            if (!rd<u32>(g_battle_actors + 4 * i)) continue;
+            if (i == active) mx = g_heads[k].first, my = g_heads[k].second;
+            k++;
+        }
+        cpu::call32(g_set_float, {snapshot, g_name_map_x, bits_of(mx)});
+        cpu::call32(g_set_float, {snapshot, g_name_map_y, bits_of(my)});
+    }
     u32 show_pc = rd<u8>(B.is_gamepad) == 0;
     static u32 logged = 2;
     if (show_pc != logged) LOGI("gamepad: battle HUD ShowPCButtons=%u", logged = show_pc);
     cpu::call32(g_set_bool, {snapshot, g_name_show_pc, show_pc});
+    // The HUD script sets the ability button (button_y) to the costume's touch picture only when
+    // the costume changes, but puts it on its controller frame (the Y icon) at every battle start
+    // and on every switch to controller icons. So from the second battle with the same costume,
+    // and after any switch back to touch, it showed Y. Forgetting the costume it last showed makes
+    // it pick the right frame on every update: "Robot" != false, while no costume ("") == false.
+    cpu::call32(g_set_bool, {snapshot, g_name_last_costume, 0});
     // The tap targets around a prompt are for touch; with a controller the prompt text (with its
     // button icon) is all the PC version shows.
     if (!show_pc) cpu::call32(g_set_bool, {snapshot, g_name_minigame_visible, 0});
@@ -546,12 +662,26 @@ void install(Module *cq) {
     };
     g_name_show_pc = name("ShowPCButtons");
     g_name_minigame_visible = name("MinigameVisible");
+    g_name_last_costume = name("_lastCurrentCostume");
+    g_name_map_x = name("ButtonMapScreenXCenter");
+    g_name_map_y = name("ButtonMapScreenYCenter");
+    g_set_float = need("_ZN18FlashValueSnapshot17SetGlobalVariableERK4Namef");
+    g_battle_actors = need("g_BattleActors");
+    g_active_actor = need("g_BattleActiveActor");
+    g_world_xform_orig = hook_arm(cq, "_ZNK8Skeleton17GetWorldTransformER11VQTransformRK4Name",
+                                  cpu::add_thunk("pad_world_xform", &abi::wrapped<t_world_xform>));
+    g_to_screen_orig = hook_arm(cq, "_ZNK8CoCamera5Proxy19WorldCoordsToScreenERK4vec3",
+                                cpu::add_thunk("pad_to_screen", &abi::wrapped<t_to_screen>));
+    g_run_away_cb = need("_Z27BattleInput_RunAwayCallback15ModalDialogTypePv");
+    g_modal_show_orig = hook_arm(cq, "_ZN11ModalDialog4ShowEPKcS1_15ModalDialogTypePFvS2_PvES3_",
+                                 cpu::add_thunk("pad_modal_show", &abi::wrapped<t_modal_show>));
+    g_bind_texture_orig = hook_arm(cq, "_ZN5RsRefI7TextureE8BindFileEPKcb",
+                                   cpu::add_thunk("pad_bind_texture", &abi::wrapped<t_bind_texture>));
+    g_texture_lock = need("_ZNK5RsRefI7TextureE4LockEv");
+    g_create_image_orig = hook_arm(cq, "_ZN17FlashImageCreator11CreateImageERK18GFxImageCreateInfo",
+                                   cpu::add_thunk("pad_create_image", &abi::wrapped<t_create_image>));
     if (datapatch::icon_library_ready()) {
-        g_bind_texture_orig = hook_arm(cq, "_ZN5RsRefI7TextureE8BindFileEPKcb",
-                                       cpu::add_thunk("pad_bind_texture", &abi::wrapped<t_bind_texture>));
-        g_texture_lock = loader::lookup_in(cq, "_ZNK5RsRefI7TextureE4LockEv");
-        g_create_image_orig = hook_arm(cq, "_ZN17FlashImageCreator11CreateImageERK18GFxImageCreateInfo",
-                                       cpu::add_thunk("pad_create_image", &abi::wrapped<t_create_image>));
+        g_icons_ready = true;
         g_image_d0_orig = hook_arm(cq, "_ZN10GImageInfoD0Ev", cpu::add_thunk("pad_image_d0", &abi::wrapped<t_image_d0>));
         g_image_d1_orig = hook_arm(cq, "_ZN10GImageInfoD1Ev", cpu::add_thunk("pad_image_d1", &abi::wrapped<t_image_d1>));
         g_create_platform_texture = need("_ZN12FlashManager21CreatePlatformTextureEP7Texture");

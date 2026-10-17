@@ -252,6 +252,10 @@ public final class DevTools {
 
     /** Called for every touch event before the game sees it. */
     public static void onTouch(MotionEvent ev) {
+        if (ev.getActionMasked() == MotionEvent.ACTION_DOWN && !sTouched) {
+            sTouched = true;  // controller mode off until the next controller input
+            reportControllers();
+        }
         if (ev.getActionMasked() == MotionEvent.ACTION_POINTER_DOWN && ev.getPointerCount() == 3) {
             long now = System.currentTimeMillis();
             if (now - sLastMenu > 1000) {
@@ -284,6 +288,10 @@ public final class DevTools {
             + "input.IsGamepadMode = function() if _cqPad then return true end return _cqIsGamepadMode() end end";
     private static boolean sWatching;
     private static Boolean sPadReported;
+    // Controller mode follows the input used last: on while a controller is connected, off after a
+    // touch until the next controller input. Reporting it for as long as a controller was merely
+    // connected left the battle HUD's ability button on Y after switching to touch.
+    private static boolean sTouched;
 
     private static void watchControllers() {
         if (!sWatching) {
@@ -307,7 +315,7 @@ public final class DevTools {
             if (first == null) first = d;
             if (id == sLastPadId) last = d;
         }
-        boolean any = first != null;
+        boolean any = first != null && !sTouched;
         if (sPadReported == null || sPadReported != any) {
             sPadReported = any;
             nativeCommand("_cqPad = " + any);
@@ -329,6 +337,10 @@ public final class DevTools {
     }
 
     private static void padUsed(InputDevice d) {
+        if (sTouched) {
+            sTouched = false;
+            reportControllers();
+        }
         if (d.getId() != sLastPadId) {
             sLastPadId = d.getId();
             reportIcons(d);

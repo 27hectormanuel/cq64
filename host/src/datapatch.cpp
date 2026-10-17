@@ -12,7 +12,15 @@
 // mobile icons and Xbox360_ControllerIcons.gfx's is built from those two files at startup and
 // spliced over Mobile_InputIcons.gfx (the engine preloads that file as a shared movie; a copy
 // elsewhere would not get its textures), padded to its size.
+//
+// Three movies get a script added (host/ui/*.as, compiled into menu_fixes_action.h): the journal
+// (Notebook_DLC.gfx), the stamp shop (StampShop_DLC.gfx) and the battle HUD (BattleHUD_DLC.gfx). They are compressed already, so the
+// rebuilt movie is a little bigger than the original. Each one sits right after its non-DLC
+// version (Notebook.gfx, StampShop.gfx, BattleHUD.gfx), which the game never loads (the engine names only the
+// _DLC movies), so the rebuilt movie is served from there, with a new local header, and its
+// directory entry is pointed at it. See docs/menu-fixes.md.
 #include "datapatch.h"
+#include "menu_fixes_action.h"
 
 #include <zlib.h>
 
@@ -33,17 +41,10 @@ struct Patch {
     std::vector<u8> old_bytes, new_bytes;
 };
 
-const Patch PATCHES[] = {
-    // FrontEnd.gfx, MenuItem "Focus" frame: the selection box's colour transform tints its
-    // (dark) texture red (green/blue x0, red +200). Make it white instead, as on PC: colour x0 +255.
-    {"Data/UI/FrontEnd/Opt/FrontEnd.gfx", 0x892,
-     {0xe9, 0x00, 0x00, 0x00, 0x03, 0x98, 0xc8, 0x00, 0x00, 0x00, 0x00},
-     {0xe8, 0x00, 0x00, 0x00, 0x03, 0x98, 0xff, 0x3f, 0xcf, 0xf0, 0x00}},
-    // Pause.gfx: the same selection box in the in-game menu.
-    {"Data/UI/Pause/Opt/Pause.gfx", 0xc04,
-     {0xe9, 0x00, 0x00, 0x00, 0x03, 0x98, 0xc8, 0x00, 0x00, 0x00, 0x00},
-     {0xe8, 0x00, 0x00, 0x00, 0x03, 0x98, 0xff, 0x3f, 0xcf, 0xf0, 0x00}},
-};
+// None at the moment. The main menu's and pause menu's selection box (FrontEnd.gfx +0x892,
+// Pause.gfx +0xc04: a colour transform, red +200 over a dark texture) used to be made white here
+// to match PC; it is red again, as Double Fine shipped it on Android.
+const std::vector<Patch> PATCHES;
 
 struct Located {
     s64 pos;  // absolute offset in the pack file
@@ -140,19 +141,40 @@ bool parse_movie(const std::vector<u8> &file, Movie &m) {
     return true;
 }
 
+void append_tag(std::vector<u8> &out, const Tag &t) {
+    size_t n = t.data.size();
+    if (n < 0x3f) {
+        out.push_back((t.code << 6 | n) & 0xff), out.push_back((t.code << 6 | n) >> 8);
+    } else {
+        u16 cl = t.code << 6 | 0x3f;
+        out.push_back(cl & 0xff), out.push_back(cl >> 8);
+        for (int i = 0; i < 4; i++) out.push_back(n >> (8 * i));
+    }
+    out.insert(out.end(), t.data.begin(), t.data.end());
+}
+
+// The tags of a tag list (a movie body or a sprite's), up to and including End.
+std::vector<Tag> parse_tags(const u8 *p, size_t len) {
+    std::vector<Tag> tags;
+    size_t i = 0;
+    while (i + 2 <= len) {
+        u16 cl = rd16(p + i);
+        size_t n = cl & 0x3f, h = 2;
+        if (n == 0x3f) {
+            if (i + 6 > len) break;
+            n = le32(p + i + 2), h = 6;
+        }
+        if (i + h + n > len) break;
+        tags.push_back({(u16)(cl >> 6), std::vector<u8>(p + i + h, p + i + h + n)});
+        i += h + n;
+        if (cl >> 6 == 0) break;
+    }
+    return tags;
+}
+
 std::vector<u8> write_movie(const Movie &m) {
     std::vector<u8> body = m.header;
-    for (const Tag &t : m.tags) {
-        size_t n = t.data.size();
-        if (n < 0x3f) {
-            body.push_back((t.code << 6 | n) & 0xff), body.push_back((t.code << 6 | n) >> 8);
-        } else {
-            u16 cl = t.code << 6 | 0x3f;
-            body.push_back(cl & 0xff), body.push_back(cl >> 8);
-            for (int i = 0; i < 4; i++) body.push_back(n >> (8 * i));
-        }
-        body.insert(body.end(), t.data.begin(), t.data.end());
-    }
+    for (const Tag &t : m.tags) append_tag(body, t);
     uLongf clen = compressBound(body.size());
     std::vector<u8> out(8 + clen);
     memcpy(out.data(), "CFX", 3);
@@ -160,7 +182,7 @@ std::vector<u8> write_movie(const Movie &m) {
     u32 total = body.size() + 8;
     for (int i = 0; i < 4; i++) out[4 + i] = total >> (8 * i);
     if (compress2(out.data() + 8, &clen, body.data(), body.size(), 9) != Z_OK) {
-        LOGW("datapatch: icon library: compression failed");
+        LOGW("datapatch: movie compression failed");
         return {};
     }
     out.resize(8 + clen);
@@ -291,6 +313,278 @@ bool read_member(int fd, s64 base, s64 size, const char *name, std::vector<u8> &
     return pread_all(fd, out.data(), len, m);
 }
 
+// ---- movies with a script added (menu_fixes_action.h)
+
+struct Entry {
+    s64 cd_pos = -1;  // absolute offset of the central directory entry
+    s64 lho = -1;     // absolute offset of the local header
+    u8 cd[46], lh[30];
+};
+
+// Calls f(name, cd entry, absolute cd entry offset) for every member of the zip in
+// [base, base + size); false if its central directory can't be read.
+template <class F> bool each_entry(int fd, s64 base, s64 size, F f) {
+    u8 tail[65557];
+    s64 tlen = size < (s64)sizeof tail ? size : (s64)sizeof tail;
+    if (!pread_all(fd, tail, tlen, base + size - tlen)) return false;
+    s64 eocd = -1;
+    for (s64 i = tlen - 22; i >= 0; i--)
+        if (le32(tail + i) == 0x06054b50) { eocd = i; break; }
+    if (eocd < 0) return false;
+    u32 count = le16(tail + eocd + 10), cd_size = le32(tail + eocd + 12), cd_off = le32(tail + eocd + 16);
+    std::vector<u8> cd(cd_size);
+    if (!pread_all(fd, cd.data(), cd_size, base + cd_off)) return false;
+    for (u32 i = 0, p = 0; i < count && p + 46 <= cd_size; i++) {
+        const u8 *e = cd.data() + p;
+        if (le32(e) != 0x02014b50) return false;
+        u16 n = le16(e + 28), x = le16(e + 30), c = le16(e + 32);
+        f(std::string((const char *)e + 46, n), e, base + cd_off + p);
+        p += 46 + n + x + c;
+    }
+    return true;
+}
+
+// Rebuilds `member` (a stored movie) with `action` (a DoAction tag with its 6-byte header) added
+// after its frame-1 script, and serves it from the local header of `donor`, a movie the game
+// never loads that lies before it. The entries from the donor up to the member (the donor and
+// empty folder entries, as in the game's pack) are kept valid as empty entries: each gets a new
+// local header after the movie and its directory entry points there. So every directory entry
+// still leads to a matching local header and no two overlap.
+// The highest character id a movie defines.
+u16 max_character_id(const Movie &m) {
+    static const u16 DEFINES[] = {2, 6, 7, 10, 11, 20, 21, 22, 32, 33, 34, 35, 36, 37, 39, 46, 48, 60, 75, 83, 84, 1001};
+    u16 max_id = 0;
+    for (const Tag &t : m.tags)
+        if (t.data.size() >= 2 && std::find(std::begin(DEFINES), std::end(DEFINES), t.code) != std::end(DEFINES))
+            max_id = std::max(max_id, rd16(t.data.data()));
+    return max_id;
+}
+
+// BattleHUD_DLC.gfx: the action map's sprite (the one with a "button_b_bg" child) has an unnamed
+// backdrop (a bitmap-filled shape at depth 2, placed with no name) behind Android's touch column.
+// A script can't reach unnamed shapes, so with a controller it moved along with the map and showed
+// as a dark box mid-screen. The shape is wrapped in a new one-frame sprite placed as "cq64_panel",
+// which battlehud_fix.as hides in controller mode.
+bool name_buttons_panel(Movie &m) {
+    u16 max_id = max_character_id(m);
+    for (size_t k = 0; k < m.tags.size(); k++) {
+        Tag &sprite = m.tags[k];
+        if (sprite.code != TAG_SPRITE || sprite.data.size() < 4) continue;
+        std::vector<Tag> sub = parse_tags(sprite.data.data() + 4, sprite.data.size() - 4);
+        auto named = [](const Tag &t, const char *name) {
+            const std::vector<u8> &d = t.data;
+            return std::search(d.begin(), d.end(), name, name + strlen(name) + 1) != d.end();
+        };
+        if (std::none_of(sub.begin(), sub.end(), [&](const Tag &t) { return t.code == TAG_PLACE2 && named(t, "button_b_bg"); }))
+            continue;
+        for (Tag &t : sub) {
+            // flags 0x06 (character, matrix), depth 2, character, an empty matrix
+            if (t.code != TAG_PLACE2 || t.data.size() != 6 || t.data[0] != 0x06 || rd16(&t.data[1]) != 2 || t.data[5])
+                continue;
+            u16 shape = rd16(&t.data[3]), id = max_id + 1;
+            Tag wrap{TAG_SPRITE, {}};
+            wrap.data = {(u8)id, (u8)(id >> 8), 1, 0};
+            append_tag(wrap.data, Tag{TAG_PLACE2, {0x06, 1, 0, (u8)shape, (u8)(shape >> 8), 0}});
+            append_tag(wrap.data, Tag{TAG_SHOW_FRAME, {}});
+            append_tag(wrap.data, Tag{TAG_END, {}});
+            t.data = {0x26, 2, 0, (u8)id, (u8)(id >> 8), 0};
+            const char *name = "cq64_panel";
+            t.data.insert(t.data.end(), name, name + strlen(name) + 1);
+            std::vector<u8> data(sprite.data.begin(), sprite.data.begin() + 4);
+            for (const Tag &u : sub) append_tag(data, u);
+            sprite.data = std::move(data);
+            m.tags.insert(m.tags.begin() + k, std::move(wrap));
+            LOGI("datapatch: battle HUD: backdrop %u of sprite %u named cq64_panel", shape, rd16(m.tags[k + 1].data.data()));
+            return true;
+        }
+    }
+    LOGW("datapatch: battle HUD: action map backdrop not found");
+    return false;
+}
+
+// Bits, most significant first, for SWF records (RECT, MATRIX, shape records).
+struct BitWriter {
+    std::vector<u8> &out;
+    int used = 8;
+    void put(u32 v, int n) {
+        while (n--) {
+            if (used == 8) out.push_back(0), used = 0;
+            if (v >> n & 1) out.back() |= 0x80 >> used;
+            used++;
+        }
+    }
+    void align() { used = 8; }
+};
+
+// DefineShape: a 32x32 px square filled with image `bitmap` (clipped, 1 image px = 1 px).
+Tag icon_shape(u16 id, u16 bitmap) {
+    Tag t{2, {(u8)id, (u8)(id >> 8)}};
+    BitWriter w{t.data};
+    w.put(11, 5), w.put(0, 11), w.put(640, 11), w.put(0, 11), w.put(640, 11);  // bounds 0..640 twips
+    w.align();
+    t.data.insert(t.data.end(), {1, 0x41, (u8)bitmap, (u8)(bitmap >> 8)});  // 1 fill: clipped bitmap
+    w.put(1, 1), w.put(22, 5), w.put(20 << 16, 22), w.put(20 << 16, 22), w.put(0, 1), w.put(0, 5);  // scale 20
+    w.align();
+    t.data.push_back(0);   // no line styles
+    t.data.push_back(0x10);  // 1 fill bit, 0 line bits
+    w.put(0, 1), w.put(0, 1), w.put(0, 1), w.put(1, 1), w.put(0, 1), w.put(1, 1);  // move to, fill style 1
+    w.put(1, 5), w.put(0, 1), w.put(0, 1), w.put(1, 1);
+    const int edges[4][2] = {{640, 0}, {0, 640}, {-640, 0}, {0, -640}};
+    for (auto &e : edges) {  // straight, 11-bit, horizontal or vertical
+        w.put(1, 1), w.put(1, 1), w.put(9, 4), w.put(0, 1);
+        w.put(e[0] == 0, 1), w.put((u32)(e[0] ? e[0] : e[1]) & 0x7ff, 11);
+    }
+    w.put(0, 6);  // end of shape
+    w.align();
+    return t;
+}
+
+// A one-frame sprite showing `child` (named `name`, if given) at depth `depth`.
+Tag wrap_sprite(u16 id, u16 child, u16 depth = 1) {
+    Tag t{39, {(u8)id, (u8)(id >> 8), 1, 0}};
+    append_tag(t.data, Tag{26, {0x06, (u8)depth, (u8)(depth >> 8), (u8)child, (u8)(child >> 8), 0}});
+    append_tag(t.data, Tag{TAG_SHOW_FRAME, {}});
+    append_tag(t.data, Tag{TAG_END, {}});
+    return t;
+}
+
+// BattleHUD_DLC.gfx: the PC's "LT + RT  RUN AWAY" needs the trigger icons, which the Android HUD
+// doesn't import. They come from the same library its other button icons do
+// (Shared/ControllerIcons.swf = CQ64's icon library, which has the Xbox ones), each as a 32x32
+// image in a sprite exported as cq64_LT / cq64_RT for battlehud_fix.as to attach.
+bool add_trigger_icons(Movie &m, std::vector<Tag>::iterator at) {
+    const Tag *imp = nullptr;  // an existing import of a button icon: its url and flags
+    static const char key[] = "BUTTON_B";
+    for (const Tag &t : m.tags)
+        if (t.code == 71 && std::search(t.data.begin(), t.data.end(), key, key + sizeof key) != t.data.end()) imp = &t;
+    if (!imp) return false;
+    size_t url_end = std::find(imp->data.begin(), imp->data.end(), 0) - imp->data.begin();
+    if (url_end + 3 > imp->data.size()) return false;
+    u16 id = max_character_id(m) + 1;
+    const char *names[2] = {"BUTTON_TriggerLeft", "BUTTON_TriggerRight"};
+    std::vector<Tag> add;
+    for (int i = 0; i < 2; i++) {  // one symbol per import, as the game's movies do (GFx resolved only the first of two)
+        Tag t{71, std::vector<u8>(imp->data.begin(), imp->data.begin() + url_end + 3)};  // url, 1, 0
+        t.data.push_back(1), t.data.push_back(0);
+        t.data.push_back((u8)(id + i)), t.data.push_back((u8)((id + i) >> 8));
+        t.data.insert(t.data.end(), names[i], names[i] + strlen(names[i]) + 1);
+        add.push_back(std::move(t));
+    }
+    Tag exp{56, {2, 0}};
+    const char *exports[2] = {"cq64_LT", "cq64_RT"};
+    for (int i = 0; i < 2; i++) {
+        u16 image = id + i, shape = id + 2 + i, sprite = id + 4 + i;
+        add.push_back(icon_shape(shape, image));
+        add.push_back(wrap_sprite(sprite, shape));
+        exp.data.push_back((u8)sprite), exp.data.push_back((u8)(sprite >> 8));
+        exp.data.insert(exp.data.end(), exports[i], exports[i] + strlen(exports[i]) + 1);
+    }
+    add.push_back(exp);
+    m.tags.insert(at, add.begin(), add.end());
+    LOGI("datapatch: battle HUD: trigger icons added (ids %u..%u)", id, id + 5);
+    return true;
+}
+
+bool battle_hud_edit(Movie &m) {
+    bool ok = name_buttons_panel(m);
+    auto frame_end = std::find_if(m.tags.begin(), m.tags.end(),
+                                  [](const Tag &t) { return t.code == TAG_SHOW_FRAME || t.code == TAG_END; });
+    // before frame 1's scripts, so the symbols exist when they run
+    auto first_action = std::find_if(m.tags.begin(), frame_end, [](const Tag &t) { return t.code == 12; });
+    return add_trigger_icons(m, first_action) && ok;
+}
+
+void build_fixed(int fd, s64 base, s64 size, const char *member, const char *donor, const u8 *action,
+                 size_t action_len, bool (*edit)(Movie &) = nullptr) {
+    struct Moved {
+        std::string name;
+        s64 cd_pos, lho;
+        u8 cd[46];
+        u32 len;
+    };
+    Entry m, d;
+    std::vector<Moved> all;
+    if (!each_entry(fd, base, size, [&](const std::string &name, const u8 *e, s64 at) {
+            Moved v{name, at, base + le32(e + 42), {}, le32(e + 24)};
+            memcpy(v.cd, e, 46);
+            if (name == member) m.cd_pos = at, m.lho = v.lho, memcpy(m.cd, e, 46);
+            if (name == donor) d.cd_pos = at, d.lho = v.lho, memcpy(d.cd, e, 46);
+            all.push_back(std::move(v));
+        })) {
+        LOGW("datapatch: %s: pack directory unreadable", member);
+        return;
+    }
+    if (m.cd_pos < 0 || d.cd_pos < 0 || d.lho >= m.lho || le16(m.cd + 10) != 0 ||
+        !pread_all(fd, m.lh, 30, m.lho) || le32(m.lh) != 0x04034b50) {
+        LOGW("datapatch: %s or %s not found as expected; not fixed", member, donor);
+        return;
+    }
+    std::vector<Moved> moved;  // the donor and what lies between it and the member
+    for (Moved &v : all)
+        if (v.lho >= d.lho && v.lho < m.lho) {
+            if (v.cd_pos != d.cd_pos && v.len != 0) {
+                LOGW("datapatch: %s: %s lies between it and %s; not fixed", member, v.name.c_str(), donor);
+                return;
+            }
+            moved.push_back(std::move(v));
+        }
+    u32 len = le32(m.cd + 24);
+    s64 data = m.lho + 30 + le16(m.lh + 26) + le16(m.lh + 28), end = data + len;
+    std::vector<u8> file(len);
+    Movie mv;
+    if (len > (1 << 20) || !pread_all(fd, file.data(), len, data) || !parse_movie(file, mv)) {
+        LOGW("datapatch: %s unreadable; not fixed", member);
+        return;
+    }
+    auto frame_end = std::find_if(mv.tags.begin(), mv.tags.end(),
+                                  [](const Tag &t) { return t.code == TAG_SHOW_FRAME || t.code == TAG_END; });
+    mv.tags.insert(frame_end, Tag{12, std::vector<u8>(action + 6, action + action_len)});
+    if (edit) edit(mv);
+    std::vector<u8> out = write_movie(mv);
+    if (out.empty()) return;
+    auto put32 = [](u8 *p, u32 v) { for (int i = 0; i < 4; i++) p[i] = v >> (8 * i); };
+    // A local header (from `lh`, without extra field) and the name; the directory entry `cd` is
+    // pointed at it with the same CRC and size.
+    std::vector<u8> blob;
+    auto add_entry = [&](const u8 *lh, u8 *cd, s64 cd_pos, u32 crc, u32 n) {
+        u16 name_len = le16(cd + 28);
+        std::vector<u8> name(name_len);
+        if (!pread_all(fd, name.data(), name_len, cd_pos + 46)) return false;
+        put32(cd + 16, crc), put32(cd + 20, n), put32(cd + 24, n), put32(cd + 42, (u32)(d.lho + blob.size() - base));
+        size_t at = blob.size();
+        blob.insert(blob.end(), lh, lh + 30);
+        put32(&blob[at + 14], crc), put32(&blob[at + 18], n), put32(&blob[at + 22], n), put16(&blob[at + 28], 0);
+        blob.insert(blob.end(), name.begin(), name.end());
+        return true;
+    };
+    std::vector<u8> mcd(m.cd, m.cd + 46);
+    if (!add_entry(m.lh, mcd.data(), m.cd_pos, crc32(0, out.data(), out.size()), out.size())) return;
+    blob.insert(blob.end(), out.begin(), out.end());
+    std::vector<std::vector<u8>> cds;
+    for (Moved &v : moved) {
+        u8 lh[30];
+        if (!pread_all(fd, lh, 30, v.lho) || le32(lh) != 0x04034b50) {
+            LOGW("datapatch: %s: %s has no local header; not fixed", member, v.name.c_str());
+            return;
+        }
+        cds.emplace_back(v.cd, v.cd + 46);
+        if (!add_entry(lh, cds.back().data(), v.cd_pos, 0, 0)) return;
+    }
+    if (d.lho + (s64)blob.size() > end) {
+        LOGW("datapatch: %s with its fix doesn't fit (%zu bytes)", member, out.size());
+        return;
+    }
+    g_generated.push_back(std::move(blob));
+    g_located.push_back({d.lho, &g_generated.back()});
+    g_generated.push_back(std::move(mcd));
+    g_located.push_back({m.cd_pos, &g_generated.back()});
+    for (size_t i = 0; i < moved.size(); i++) {
+        g_generated.push_back(std::move(cds[i]));
+        g_located.push_back({moved[i].cd_pos, &g_generated.back()});
+    }
+    LOGI("datapatch: %s: fix added (%u -> %zu bytes, served from %s's place)", member, len, out.size(), donor);
+}
+
 void build_icons(int fd, s64 base, s64 size) {
     std::vector<u8> mobile, xbox;
     s64 slot_pos = 0;
@@ -338,6 +632,12 @@ void init(const std::string &pack_path) {
         LOGI("datapatch: %s +0x%x", p.member, p.offset);
     }
     build_icons(fd, inner, inner_size);
+    build_fixed(fd, inner, inner_size, "Data/UI/Notebook_DLC/Opt/Notebook_DLC.gfx", "Data/UI/Notebook/Opt/Notebook.gfx",
+                kNotebookFix, sizeof kNotebookFix);
+    build_fixed(fd, inner, inner_size, "Data/UI/StampShop_DLC/Opt/StampShop_DLC.gfx",
+                "Data/UI/StampShop/Opt/StampShop.gfx", kStampShopFix, sizeof kStampShopFix);
+    build_fixed(fd, inner, inner_size, "Data/UI/BattleHUD_DLC/Opt/BattleHUD_DLC.gfx",
+                "Data/UI/BattleHUD/Opt/BattleHUD.gfx", kBattleHudFix, sizeof kBattleHudFix, battle_hud_edit);
     g_dev = st.st_dev;
     g_ino = st.st_ino;
     close(fd);
