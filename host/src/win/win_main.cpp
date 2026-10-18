@@ -177,6 +177,10 @@ struct Pad {
         if (ignore) return;
         SDL_GameController *gc = SDL_GameControllerOpen(index);
         if (!gc) return;
+        if (std::find(open.begin(), open.end(), gc) != open.end()) {
+            SDL_GameControllerClose(gc);
+            return;
+        }
         LOGI("controller: %s (type %d)", SDL_GameControllerName(gc), (int)SDL_GameControllerGetType(gc));
         open.push_back(gc);
         if (!last) use(gc);
@@ -194,18 +198,37 @@ struct Pad {
         report();
         send();
     }
-    void event(SDL_JoystickID id) {
-        for (SDL_GameController *gc : open)
-            if (SDL_JoystickInstanceID(SDL_GameControllerGetJoystick(gc)) == id && gc != last) use(gc);
-        send();
-    }
+    void event(SDL_JoystickID) { send(); }
     bool combo = false;  // LB + RB + A held: opens / closes the debug console
     void send() {
-        SDL_GameController *gc = last;
-        jint buttons = keys | g_test_buttons.load();
-        if (gc)
+        jint v[7] = {keys | g_test_buttons.load()};
+        // Android reports a resting stick as exactly 0 (each axis has a "flat" range it filters);
+        // SDL passes the jitter of a resting stick on. Any change counts as controller use for the
+        // game, so without a dead zone it keeps switching the HUD back to controller icons after
+        // a touch. Same for triggers resting slightly pressed. Every open controller contributes,
+        // so an idle controller's resting noise can't override the one the player is holding.
+        for (SDL_GameController *gc : open) {
+            jint gb = 0;
             for (int b = 0; b <= SDL_CONTROLLER_BUTTON_DPAD_RIGHT; b++)
-                if (SDL_GameControllerGetButton(gc, (SDL_GameControllerButton)b)) buttons |= 1 << b;
+                if (SDL_GameControllerGetButton(gc, (SDL_GameControllerButton)b)) gb |= 1 << b;
+            auto axis = [&](SDL_GameControllerAxis a) { return (jint)SDL_GameControllerGetAxis(gc, a); };
+            auto stick = [&](SDL_GameControllerAxis ax, SDL_GameControllerAxis ay, jint &x, jint &y) {
+                x = axis(ax), y = axis(ay);
+                if ((long)x * x + (long)y * y < (long)kStickDeadZone * kStickDeadZone) x = y = 0;
+            };
+            auto trigger = [&](SDL_GameControllerAxis a) { jint t = axis(a); return t < kTriggerDeadZone ? 0 : t; };
+            jint lx = 0, ly = 0, rx = 0, ry = 0;
+            stick(SDL_CONTROLLER_AXIS_LEFTX, SDL_CONTROLLER_AXIS_LEFTY, lx, ly);
+            stick(SDL_CONTROLLER_AXIS_RIGHTX, SDL_CONTROLLER_AXIS_RIGHTY, rx, ry);
+            jint lt = trigger(SDL_CONTROLLER_AXIS_TRIGGERLEFT), rt = trigger(SDL_CONTROLLER_AXIS_TRIGGERRIGHT);
+            if (gb | lx | ly | rx | ry | lt | rt) use(gc);
+            v[0] |= gb;
+            if ((long)lx * lx + (long)ly * ly > (long)v[1] * v[1] + (long)v[2] * v[2]) v[1] = lx, v[2] = ly;
+            if ((long)rx * rx + (long)ry * ry > (long)v[3] * v[3] + (long)v[4] * v[4]) v[3] = rx, v[4] = ry;
+            if (lt > v[5]) v[5] = lt;
+            if (rt > v[6]) v[6] = rt;
+        }
+        jint &buttons = v[0];
         constexpr jint kShoulders = 1 << SDL_CONTROLLER_BUTTON_LEFTSHOULDER | 1 << SDL_CONTROLLER_BUTTON_RIGHTSHOULDER;
         bool held = (buttons & kShoulders) == kShoulders && (buttons & 1 << SDL_CONTROLLER_BUTTON_A);
         if (held && !combo) winconsole::toggle();
@@ -214,27 +237,13 @@ struct Pad {
         using Fn = void (*)(JNIEnv *, jclass, jint, jint, jint, jint, jint, jint, jint);
         auto fn = (Fn)fakejvm::native(DEVTOOLS, "nativePad");
         if (!fn) return;
-        auto axis = [&](SDL_GameControllerAxis a) { return gc ? (jint)SDL_GameControllerGetAxis(gc, a) : 0; };
-        // Android reports a resting stick as exactly 0 (each axis has a "flat" range it filters);
-        // SDL passes the jitter of a resting stick on. Any change counts as controller use for the
-        // game, so without a dead zone it keeps switching the HUD back to controller icons after
-        // a touch. Same for triggers resting slightly pressed.
-        auto stick = [&](SDL_GameControllerAxis ax, SDL_GameControllerAxis ay, jint &x, jint &y) {
-            x = axis(ax), y = axis(ay);
-            if ((long)x * x + (long)y * y < (long)kStickDeadZone * kStickDeadZone) x = y = 0;
-        };
-        auto trigger = [&](SDL_GameControllerAxis a) { jint v = axis(a); return v < kTriggerDeadZone ? 0 : v; };
-        jint v[7] = {buttons};
-        stick(SDL_CONTROLLER_AXIS_LEFTX, SDL_CONTROLLER_AXIS_LEFTY, v[1], v[2]);
-        stick(SDL_CONTROLLER_AXIS_RIGHTX, SDL_CONTROLLER_AXIS_RIGHTY, v[3], v[4]);
-        v[5] = trigger(SDL_CONTROLLER_AXIS_TRIGGERLEFT), v[6] = trigger(SDL_CONTROLLER_AXIS_TRIGGERRIGHT);
         for (int i = 0; i < 6; i++)
             if (jint t = g_test_axes[i].load()) v[1 + i] = t;
         if (!memcmp(v, sent, sizeof v)) return;  // nothing the game would see changed
         memcpy(sent, v, sizeof v);
         if (touched && (v[0] | v[1] | v[2] | v[3] | v[4] | v[5] | v[6])) {
             LOGI("controller input after a touch (%s): buttons %x sticks %d,%d %d,%d triggers %d %d",
-                 gc ? SDL_GameControllerName(gc) : "-", v[0], v[1], v[2], v[3], v[4], v[5], v[6]);
+                 last ? SDL_GameControllerName(last) : "-", v[0], v[1], v[2], v[3], v[4], v[5], v[6]);
             touched = false;
             report();
         }
@@ -441,6 +450,8 @@ int main(int argc, char **argv) {
     win::g_apk = choose_apk(argc, argv, dir);
     if (win::g_apk.empty()) return 0;
 
+    SDL_SetHint("SDL_GAMECONTROLLER_ALLOW_STEAM_VIRTUAL_GAMEPAD", "1");
+    SDL_SetHint(SDL_HINT_JOYSTICK_HIDAPI_STEAM, "0");
     if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_GAMECONTROLLER | SDL_INIT_EVENTS | SDL_INIT_AUDIO) != 0) {
         LOGE("SDL_Init: %s", SDL_GetError());
         return 1;

@@ -21,14 +21,19 @@ if [ -z "${PROTON:-}" ]; then
     done
     for d in "$STEAM"/compatibilitytools.d/*/; do [ -x "$d/proton" ] && candidates+=("${d%/}"); done
     [ ${#candidates[@]} -gt 0 ] || { echo "No Proton found: install Proton in Steam (or set PROTON=...)" >&2; exit 1; }
-    # Numbered releases first, newest last; Experimental only if nothing else is installed.
-    PROTON=$(printf '%s\n' "${candidates[@]}" | grep -v Experimental | sort -V | tail -1)
+    # Numbered releases first, newest last; Experimental / others only if nothing else is installed.
+    PROTON=$(printf '%s\n' "${candidates[@]}" | grep -E '/Proton [0-9]' | sort -V | tail -1 || true)
+    [ -n "$PROTON" ] || PROTON=$(printf '%s\n' "${candidates[@]}" | grep -v Experimental | sort -V | tail -1 || true)
     [ -n "$PROTON" ] || PROTON=${candidates[0]}
 fi
 echo "Using $(basename "$PROTON")"
 
 export STEAM_COMPAT_CLIENT_INSTALL_PATH=$STEAM
 export STEAM_COMPAT_DATA_PATH=${CQ_PREFIX:-$HERE/proton-prefix}
+# Outside Steam, Proton's winebus SDL backend hides Steam Input's virtual XInput pads unless told
+# not to, and raw HIDAPI on a Bluetooth Steam Controller reads half-pressed triggers (16383) and no buttons.
+export SDL_GAMECONTROLLER_ALLOW_STEAM_VIRTUAL_GAMEPAD=${SDL_GAMECONTROLLER_ALLOW_STEAM_VIRTUAL_GAMEPAD:-1}
+export SDL_JOYSTICK_HIDAPI_STEAM=${SDL_JOYSTICK_HIDAPI_STEAM:-0}
 mkdir -p "$STEAM_COMPAT_DATA_PATH"
 
 args=()

@@ -197,7 +197,7 @@ void add_progress(float amount) {
 
 // Controller input for an active prompt (g_BattleInputState 6), ported from Cq.exe.
 void pad_prompt(u32 pressed, u32 new_dirs) {
-    if (rd<float>(B.timer) >= rd<float>(B.duration)) return;
+    if (rd<float>(B.timer) > rd<float>(B.duration)) return;
     if (rd<u8>(B.success) || rd<u8>(B.failed)) return;
     s32 prompt = rd<s32>(B.minigame);
     u32 faces = pressed & 15;  // A B X Y = green red blue yellow
