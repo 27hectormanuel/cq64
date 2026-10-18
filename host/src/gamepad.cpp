@@ -609,11 +609,23 @@ void j_pad_icons(JNIEnv *, jclass, jint set) {
     }
 }
 
+u32 g_check_double_click_orig;
+
+// void Mouse::_CheckDoubleClick(): libCq's Mouse::GenerateInputMessages zeroes the previous
+// state's m_bWasDoubleClicked array (+0x64) instead of the current state's (+0x40), so once a
+// double-click/tap happens, m_bWasDoubleClicked[0] stays 1 forever and _ReadPhysicalInputs resets
+// VirtualGamepadManager::m_bIsGamepad to 0 on every frame.
+void t_check_double_click(u32 self) {
+    memset(g2h(self + 0x40), 0, 8);
+    cpu::call32(g_check_double_click_orig, {self});
+}
+
 void j_pad(JNIEnv *, jclass, jint buttons, jint lx, jint ly, jint rx, jint ry, jint lt, jint rt) {
     const jint v[NAXES] = {lx, ly, rx, ry, lt, rt};
     for (int i = 0; i < NAXES; i++) g_axes[i].store(v[i], std::memory_order_relaxed);
     u32 old = g_buttons.exchange((u32)buttons, std::memory_order_relaxed);
     g_pressed.fetch_or((u32)buttons & ~old, std::memory_order_relaxed);
+    if ((buttons | lx | ly | rx | ry | lt | rt) && B.is_gamepad) wr<u8>(B.is_gamepad, 1);
 }
 }  // namespace
 
@@ -651,6 +663,8 @@ void install(Module *cq) {
     B.bar = need("g_BattleProgressBar");
     B.bar_adjusted = need("g_BattleProgressBarAdjusted");
     B.is_gamepad = need("_ZN21VirtualGamepadManager12m_bIsGamepadE");
+    g_check_double_click_orig = hook_arm(cq, "_ZN5Mouse17_CheckDoubleClickEv",
+                                         cpu::add_thunk("pad_check_dc", &abi::wrapped<t_check_double_click>));
     g_set_bool = need("_ZN18FlashValueSnapshot17SetGlobalVariableERK4Nameb");
     // Name::_LookupString(const char *, unsigned, ConstructorTag) returns the interned handle.
     auto name = [&](const char *text) {
