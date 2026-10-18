@@ -240,30 +240,57 @@ int t_setvbuf(u32, u32, int, u32) { return 0; }
 THUNK(setvbuf, t_setvbuf);
 
 // ---------------------------------------------------------------- fd I/O
+constexpr int A32_CREAT = 0100, A32_EXCL = 0200, A32_TRUNC = 01000, A32_APPEND = 02000, A32_NONBLOCK = 04000,
+              A32_DIRECTORY = 040000, A32_NOFOLLOW = 0100000, A32_DIRECT = 0200000, A32_LARGEFILE = 0400000,
+              A32_CLOEXEC = 02000000;
+
 int xlate_open_flags(int g) {
-    // ARM32 and arm64/x86_64 disagree on these four bits.
-    constexpr int A32_DIRECTORY = 040000, A32_NOFOLLOW = 0100000, A32_DIRECT = 0200000, A32_LARGEFILE = 0400000;
-    int h = g & ~(A32_DIRECTORY | A32_NOFOLLOW | A32_DIRECT | A32_LARGEFILE);
+    // ARM32 and arm64/x86_64 disagree on DIRECTORY..LARGEFILE; Windows (MinGW) also uses different
+    // values for CREAT (0x100 vs 0100), EXCL (0x400 vs 0200) and APPEND (0x008 vs 02000).
+    int h = g & ~(A32_CREAT | A32_EXCL | A32_TRUNC | A32_APPEND | A32_NONBLOCK | A32_DIRECTORY | A32_NOFOLLOW |
+                  A32_DIRECT | A32_LARGEFILE | A32_CLOEXEC);
+    if (g & A32_CREAT) h |= O_CREAT;
+    if (g & A32_EXCL) h |= O_EXCL;
+    if (g & A32_TRUNC) h |= O_TRUNC;
+    if (g & A32_APPEND) h |= O_APPEND;
+    if (g & A32_NONBLOCK) h |= O_NONBLOCK;
     if (g & A32_DIRECTORY) h |= O_DIRECTORY;
     if (g & A32_NOFOLLOW) h |= O_NOFOLLOW;
     if (g & A32_DIRECT) h |= O_DIRECT;
+    if (g & A32_CLOEXEC) h |= O_CLOEXEC;
+#ifdef O_BINARY
+    h |= O_BINARY;
+#endif
     return h;
 }
 int xlate_open_flags_back(int h) {
-    int g = h & ~(O_DIRECTORY | O_NOFOLLOW | O_DIRECT);
+    int g = h & ~(O_CREAT | O_EXCL | O_TRUNC | O_APPEND | O_NONBLOCK | O_DIRECTORY | O_NOFOLLOW | O_DIRECT | O_CLOEXEC);
 #ifdef O_LARGEFILE
     g &= ~O_LARGEFILE;
 #endif
-    if (h & O_DIRECTORY) g |= 040000;
-    if (h & O_NOFOLLOW) g |= 0100000;
-    if (h & O_DIRECT) g |= 0200000;
+#ifdef O_BINARY
+    g &= ~O_BINARY;
+#endif
+    if (h & O_CREAT) g |= A32_CREAT;
+    if (h & O_EXCL) g |= A32_EXCL;
+    if (h & O_TRUNC) g |= A32_TRUNC;
+    if (h & O_APPEND) g |= A32_APPEND;
+    if (h & O_NONBLOCK) g |= A32_NONBLOCK;
+    if (h & O_DIRECTORY) g |= A32_DIRECTORY;
+    if (h & O_NOFOLLOW) g |= A32_NOFOLLOW;
+    if (h & O_DIRECT) g |= A32_DIRECT;
+    if (h & O_CLOEXEC) g |= A32_CLOEXEC;
     return g;
 }
 
 void t_open(GuestThread &t) {
     std::string p = paths::translate((const char *)g2h(t.r(0)));
     int flags = xlate_open_flags((int)t.r(1));
-    int r = open(p.c_str(), flags, (mode_t)t.r(2));
+    mode_t mode = (mode_t)t.r(2);
+#ifdef _WIN32
+    mode |= 0666;  // _open uses mode for the read-only attribute; guest callers may omit it
+#endif
+    int r = open(p.c_str(), flags, mode);
     if (r < 0) {
         LOGI("open(%s) failed: %s", p.c_str(), strerror(errno));
         r = fail();
