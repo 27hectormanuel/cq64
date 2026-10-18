@@ -10,6 +10,18 @@ The earlier work (`gamepad.cpp`, 2026-10-13) already judges battle prompts the P
 flicks, mashing, timing) and pushes `ShowPCButtons` so the HUD shows button icons in controller
 mode. This adds the PC's layout and the run-away controls.
 
+> **Tutorial defending prompt note (`timer > duration`):** `Battle_ActivateMiniGame(duration)` gives
+> attack prompts (`8..20`: mash, timed, rub) a 0.6 s intro delay (`g_BattleMiniGameTimer = duration + 0.6`,
+> `g_BattleMiniGameDuration = duration`), whereas defending prompts (`0..7`: button press or directional
+> swipe) start immediately with `g_BattleMiniGameTimer = g_BattleMiniGameDuration = duration`. In
+> `BossBattle_Tutorial.lua`, `Tutorial_OnMinigameTrigger` immediately calls `SetPaused(true)`
+> (`g_BattlePaused = 1`) on the enemy's first attack (`not IsPlayerTurn() and not bDidDefendCrit`),
+> which stops `_UpdateMinigame` from ticking `g_BattleMiniGameTimer` down. Both `Cq.exe`
+> (`FUN_00498300`) and `libCq.so` (`Battle_HandleInput`) gate prompt input on `timer > duration`
+> (strictly greater than); `pad_prompt` in `gamepad.cpp` must likewise check `timer > duration`
+> rather than `timer >= duration`, or controller input is ignored for the entire 15-second tutorial
+> defend pause window.
+
 ## What the PC shows with a controller
 
 | Element | PC (controller) | Android before |
